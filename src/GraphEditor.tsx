@@ -35,7 +35,7 @@ export default function GraphEditor() {
   // RHS graph state (bottom-right panel)
   const [nodesRHS, setNodesRHS] = useState<GraphNode[]>([])
   const [edgesRHS, setEdgesRHS] = useState<GraphEdge[]>([])
-  const [, setPendingFromRHS] = useState<NodeId | null>(null)
+  const [pendingFromRHS, setPendingFromRHS] = useState<NodeId | null>(null)
   const [nextIdRHS, setNextIdRHS] = useState<NodeId>(1)
   const svgRHSRef = useRef<SVGSVGElement | null>(null)
   // Mapping RHS -> LHS
@@ -255,6 +255,7 @@ export default function GraphEditor() {
   const usedInputIds = useMemo(() => new Set(Object.values(mapping)), [mapping])
   const usedLhsIdsFromRhs = useMemo(() => new Set(Object.values(mappingRhsToLhs)), [mappingRhsToLhs])
   const currentRHSId = mappingActiveRHS ? mappingQueueRHS[mappingIndexRHS] : undefined
+  const pendingNodeRHS = useMemo(() => pendingFromRHS, [pendingFromRHS])
 
   return (
     <div className="graph-editor-root" onContextMenu={(e) => e.preventDefault()}>
@@ -586,8 +587,8 @@ export default function GraphEditor() {
                   >
                     <circle
                       r={14}
-                      fill={mappingActiveRHS && currentRHSId === n.id ? '#ffd24d' : '#69c'}
-                      stroke={mappingActiveRHS && currentRHSId === n.id ? '#cc9a00' : '#2a5e83'}
+                      fill={mappingActiveRHS && currentRHSId === n.id ? '#ffd24d' : pendingNodeRHS === n.id ? '#ffd24d' : '#69c'}
+                      stroke={mappingActiveRHS && currentRHSId === n.id ? '#cc9a00' : pendingNodeRHS === n.id ? '#cc9a00' : '#2a5e83'}
                       strokeWidth={2}
                     />
                     <text
