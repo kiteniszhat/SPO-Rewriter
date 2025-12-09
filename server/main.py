@@ -1,5 +1,5 @@
 from typing import Dict, List, Optional, Union
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import networkx as nx
@@ -27,7 +27,6 @@ class NodeLinkGraph(BaseModel):
     links: List[Link] = Field(default_factory=list)
 
     def to_networkx(self) -> nx.Graph:
-        # Convert to the dict format expected by json_graph
         data = {
             "directed": self.directed,
             "multigraph": self.multigraph,
@@ -39,20 +38,11 @@ class NodeLinkGraph(BaseModel):
 
 
 class CalculateRequest(BaseModel):
-    # Mappings
     mapping_lhs_to_input: Dict[NodeId, NodeId] = Field(default_factory=dict)
     mapping_rhs_to_lhs: Dict[NodeId, NodeId] = Field(default_factory=dict)
-
-    # Graphs (node-link format)
     graph_input: NodeLinkGraph
     graph_lhs: NodeLinkGraph
     graph_rhs: NodeLinkGraph
-
-
-class MappingValidation(BaseModel):
-    size: int
-    keys_exist: bool
-    values_exist: bool
 
 
 class CalculateResponseGraph(NodeLinkGraph):
@@ -61,7 +51,6 @@ class CalculateResponseGraph(NodeLinkGraph):
 
 app = FastAPI(title="Graph Calculate API")
 
-# Allow Vite dev server and any local origins by default
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -69,26 +58,119 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 @app.post("/calculate", response_model=CalculateResponseGraph)
 def calculate(req: CalculateRequest):
-    # For now, just echo the input graph back as the calculated result
-    # This keeps the front-end integration simple initially.
+
+    G_in  = req.graph_input.to_networkx()
+    G_lhs = req.graph_lhs.to_networkx()
+    G_rhs = req.graph_rhs.to_networkx()
+
+    lhs_to_input = dict(req.mapping_lhs_to_input)
+    rhs_to_lhs   = dict(req.mapping_rhs_to_lhs)
+
+    # Reverse map: LHS → list of RHS nodes that map to it
+    lhs_from_rhs = {}
+    for rhs_id, lhs_id in rhs_to_lhs.items():
+        lhs_from_rhs.setdefault(lhs_id, []).append(rhs_id)
+
+    # Create IDs for new nodes (for RHS neighbors that don't map to LHS)
     try:
-        # validate parsability (will raise if invalid)
-        _ = req.graph_input.to_networkx()
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to parse input graph: {e}")
+        max_input_id = max(int(n) for n in G_in.nodes)
+    except Exception:
+        max_input_id = 0
+    next_new_id = max_input_id + 1
+
+    rhs_new_to_input = {}   # RHS-id → created input-id
+
+    # --- Helper functions -----------------------------------------------------
+
+    def ensure_edge(u, v):
+        """Add edge if missing (handles directed/undirected)."""
+        if G_in.is_directed():
+            if not G_in.has_edge(u, v):
+                G_in.add_edge(u, v)
+        else:
+            if not G_in.has_edge(u, v) and not G_in.has_edge(v, u):
+                G_in.add_edge(u, v)
+
+    def create_rhs_only_node(rhs_id, rhs_src, input_src):
+        """Create a new Input graph node corresponding to an RHS neighbor
+           that does not map to LHS."""
+        nonlocal next_new_id
+
+        if rhs_id in rhs_new_to_input:
+            return rhs_new_to_input[rhs_id]
+
+        rhs_pos     = G_rhs.nodes.get(rhs_src, {})
+        rhs_nbr_pos = G_rhs.nodes.get(rhs_id,  {})
+        in_pos      = G_in.nodes.get(input_src, {})
+
+        dx = float(rhs_nbr_pos.get("x", 0.0)) - float(rhs_pos.get("x", 0.0))
+        dy = float(rhs_nbr_pos.get("y", 0.0)) - float(rhs_pos.get("y", 0.0))
+
+        new_x = float(in_pos.get("x", 0.0)) + dx
+        new_y = float(in_pos.get("y", 0.0)) + dy
+
+        new_id = next_new_id
+        next_new_id += 1
+
+        G_in.add_node(new_id, x=new_x, y=new_y)
+        rhs_new_to_input[rhs_id] = new_id
+
+        return new_id
+
+    # --- Main logic ----------------------------------------------------------
+
+    for lhs_id in list(G_lhs.nodes):
+
+        input_id = lhs_to_input.get(lhs_id)
+        if input_id is None:
+            continue  # unmapped LHS is ignored
+
+        rhs_list = lhs_from_rhs.get(lhs_id, [])
+        if not rhs_list:
+            if input_id in G_in:
+                G_in.remove_node(input_id)   # delete non-preserved node
+            continue
+
+        # Node is preserved → process outgoing edges from RHS
+        for rhs_id in rhs_list:
+
+            if rhs_id not in G_rhs:
+                continue
+
+            if G_rhs.is_directed():
+                rhs_neighbors = G_rhs.successors(rhs_id)
+            else:
+                rhs_neighbors = G_rhs.neighbors(rhs_id)
+
+            for rhs_nbr in rhs_neighbors:
+
+                lhs_nbr = rhs_to_lhs.get(rhs_nbr)
+
+                if lhs_nbr is None:
+                    # RHS-only neighbor ⇒ create new input node
+                    input_nbr = create_rhs_only_node(rhs_nbr, rhs_id, input_id)
+                    ensure_edge(input_id, input_nbr)
+                    continue
+
+                # LHS → Input mapping exists
+                input_nbr = lhs_to_input.get(lhs_nbr)
+                if input_nbr is None:
+                    continue
+
+                ensure_edge(input_id, input_nbr)
+
+    # --- Convert back to node-link -------------------------------------------
+
+    data = json_graph.node_link_data(G_in)
+    nodes = [Node(id=n["id"], x=n.get("x"), y=n.get("y")) for n in data["nodes"]]
+    links = [Link(source=l["source"], target=l["target"]) for l in data["links"]]
 
     return CalculateResponseGraph(
-        directed=req.graph_input.directed,
-        multigraph=req.graph_input.multigraph,
-        graph=req.graph_input.graph,
-        nodes=req.graph_input.nodes,
-        links=req.graph_input.links,
+        directed=data.get("directed", False),
+        multigraph=data.get("multigraph", False),
+        graph=data.get("graph", {}),
+        nodes=nodes,
+        links=links,
     )
-
-
-@app.get("/")
-def root():
-    return {"status": "ok", "docs": "/docs"}

@@ -264,7 +264,7 @@ export default function GraphEditor() {
         style={{
           display: 'grid',
           gridTemplateColumns: '7fr 3fr',
-          gridTemplateRows: 'minmax(280px, 1fr) auto',
+          gridTemplateRows: '1fr 1fr',
           gap: 8,
           height: '100%',
         }}
@@ -451,40 +451,64 @@ export default function GraphEditor() {
               Lewy klik: dodaj • Prawy klik: połącz
             </div>
           </div>
-          <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: 6 }}>
+          <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: 6, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
             <div style={{ marginBottom: 6, fontWeight: 600 }}>Calculated</div>
-            <svg
-              style={{ width: '100%', height: 260, background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: 6, display: 'block' }}
-            >
-              <g>
-                {calcEdges.map((e, idx) => {
-                  const a = calcNodes.find((n) => n.id === e.source)
-                  const b = calcNodes.find((n) => n.id === e.target)
-                  if (!a || !b) return null
-                  return (
-                    <line
-                      key={`edge-calc-${idx}`}
-                      x1={a.x}
-                      y1={a.y}
-                      x2={b.x}
-                      y2={b.y}
-                      stroke="#6b7280"
-                      strokeWidth={2}
-                    />
-                  )
-                })}
-              </g>
-              <g>
-                {calcNodes.map((n) => (
-                  <g key={`calc-${n.id}`} transform={`translate(${n.x}, ${n.y})`}>
-                    <circle r={12} fill="#93c5fd" stroke="#1d4ed8" strokeWidth={2} />
-                    <text y={4} textAnchor="middle" fontSize={11} fill="#0f172a" style={{ userSelect: 'none', pointerEvents: 'none' }}>
-                      {n.id}
-                    </text>
+            {(() => {
+              const padding = 24
+              const width = 600 // virtual canvas width for viewBox
+              const height = 260 // container height
+              const xs = calcNodes.map((n) => n.x)
+              const ys = calcNodes.map((n) => n.y)
+              const minX = xs.length ? Math.min(...xs) : 0
+              const maxX = xs.length ? Math.max(...xs) : 1
+              const minY = ys.length ? Math.min(...ys) : 0
+              const maxY = ys.length ? Math.max(...ys) : 1
+              const contentW = Math.max(1, maxX - minX)
+              const contentH = Math.max(1, maxY - minY)
+              const scaleX = (width - padding * 2) / contentW
+              const scaleY = (height - padding * 2) / contentH
+              const scale = Math.max(0.1, Math.min(scaleX, scaleY))
+              const translateX = padding - minX * scale
+              const translateY = padding - minY * scale
+              return (
+                <svg
+                  style={{ width: '100%', height: '100%', flex: 1, background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: 6, display: 'block' }}
+                  viewBox={`0 0 ${width} ${height}`}
+                  preserveAspectRatio="xMidYMid meet"
+                >
+                  <g transform={`translate(${translateX}, ${translateY}) scale(${scale})`}>
+                    <g>
+                      {calcEdges.map((e, idx) => {
+                        const a = calcNodes.find((n) => n.id === e.source)
+                        const b = calcNodes.find((n) => n.id === e.target)
+                        if (!a || !b) return null
+                        return (
+                          <line
+                            key={`edge-calc-${idx}`}
+                            x1={a.x}
+                            y1={a.y}
+                            x2={b.x}
+                            y2={b.y}
+                            stroke="#6b7280"
+                            strokeWidth={2 / scale}
+                          />
+                        )
+                      })}
+                    </g>
+                    <g>
+                      {calcNodes.map((n) => (
+                        <g key={`calc-${n.id}`} transform={`translate(${n.x}, ${n.y})`}>
+                          <circle r={12 / scale} fill="#93c5fd" stroke="#1d4ed8" strokeWidth={2 / scale} />
+                          <text y={4 / scale} textAnchor="middle" fontSize={11 / scale} fill="#0f172a" style={{ userSelect: 'none', pointerEvents: 'none' }}>
+                            {n.id}
+                          </text>
+                        </g>
+                      ))}
+                    </g>
                   </g>
-                ))}
-              </g>
-            </svg>
+                </svg>
+              )
+            })()}
           </div>
         </div>
 
@@ -624,32 +648,13 @@ export default function GraphEditor() {
             ) : Object.keys(mappingRhsToLhs).length > 0 ? (
               <>
                 <span>Zmapowano {Object.keys(mappingRhsToLhs).length}/{nodesRHS.length}</span>
-                <button onClick={async () => {
-                  try { await navigator.clipboard.writeText(JSON.stringify(mappingRhsToLhs, null, 2)) } catch {}
-                }} style={{ marginLeft: 8 }}>Copy mapping</button>
                 <button onClick={() => { setMappingRhsToLhs({}); }} style={{ marginLeft: 8 }}>Reset</button>
               </>
             ) : (
               <span style={{ color: '#6b7280' }}>Kliknij Proceed, a potem wskaż węzły w LHS.</span>
             )}
           </div>
-          <div style={{ marginTop: 6 }}>
-            <div style={{ fontSize: 12, color: '#374151', marginBottom: 4 }}>Mapping RHS → LHS</div>
-            <pre
-              style={{
-                maxHeight: 160,
-                overflow: 'auto',
-                fontSize: 12,
-                background: '#f3f4f6',
-                padding: 8,
-                borderRadius: 4,
-                border: '1px solid #e5e7eb',
-                margin: 0,
-              }}
-            >
-{JSON.stringify(mappingRhsToLhs, null, 2)}
-            </pre>
-          </div>
+          {/* Removed Mapping RHS → LHS preview as requested */}
         </div>
       </div>
     </div>
