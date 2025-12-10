@@ -1,6 +1,7 @@
 from typing import Dict, List, Optional, Union
 import json
 import logging
+import math
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -83,6 +84,7 @@ def _norm_nodeid(n):
         except ValueError:
             return n
     return n
+
 @app.post("/calculate", response_model=CalculateResponseGraph)
 def calculate(req: CalculateRequest):
     # Log request summary
@@ -93,12 +95,6 @@ def calculate(req: CalculateRequest):
             len(req.graph_lhs.nodes), len(req.graph_lhs.links),
             len(req.graph_rhs.nodes), len(req.graph_rhs.links),
         )
-        logger.info(
-            "Mappings: lhs->input=%d rhs->lhs=%d",
-            len(req.mapping_lhs_to_input), len(req.mapping_rhs_to_lhs),
-        )
-        logger.debug("lhs->input: %s", json.dumps(req.mapping_lhs_to_input, indent=2))
-        logger.debug("rhs->lhs: %s", json.dumps(req.mapping_rhs_to_lhs, indent=2))
     except Exception as e:
         logger.warning("Failed to log request summary: %s", e)
 
@@ -106,21 +102,16 @@ def calculate(req: CalculateRequest):
     G_lhs = req.graph_lhs.to_networkx()
     G_rhs = req.graph_rhs.to_networkx()
 
-
     # normalize mappings coming from JSON (keys are usually strings)
     lhs_to_input = { _norm_nodeid(k): _norm_nodeid(v) for k, v in req.mapping_lhs_to_input.items() }
     rhs_to_lhs   = { _norm_nodeid(k): _norm_nodeid(v) for k, v in req.mapping_rhs_to_lhs.items() }
-    logger.info("Normalized mappings sizes: lhs->input=%d rhs->lhs=%d", len(lhs_to_input), len(rhs_to_lhs))
-
-    # lhs_to_input = dict(req.mapping_lhs_to_input)
-    # rhs_to_lhs   = dict(req.mapping_rhs_to_lhs)
-
+    
     # Reverse map: LHS → list of RHS nodes that map to it
     lhs_from_rhs = {}
     for rhs_id, lhs_id in rhs_to_lhs.items():
         lhs_from_rhs.setdefault(lhs_id, []).append(rhs_id)
 
-    # Create IDs for new nodes (for RHS neighbors that don't map to LHS)
+    # Create IDs for new nodes
     try:
         max_input_id = max(int(n) for n in G_in.nodes)
     except Exception:
@@ -128,6 +119,8 @@ def calculate(req: CalculateRequest):
     next_new_id = max_input_id + 1
 
     rhs_new_to_input = {}   # RHS-id → created input-id
+    visited_rhs = set()     # Track nodes processed via preservation or BFS
+    
     created_nodes_count = 0
     removed_nodes_count = 0
     added_edges_count = 0
@@ -146,49 +139,58 @@ def calculate(req: CalculateRequest):
                 return True
         return False
 
+    def get_pos(graph, node_id):
+        """Helper to get x, y safely."""
+        attrs = graph.nodes.get(node_id, {})
+        return float(attrs.get("x", 0.0)), float(attrs.get("y", 0.0))
+
     def create_rhs_only_node(rhs_id, rhs_src, input_src):
-        """Create a new Input graph node corresponding to an RHS neighbor
-           that does not map to LHS."""
+        """
+        Create a new Input graph node corresponding to an RHS neighbor
+        that does not map to LHS.
+        rhs_id: the new node we are creating
+        rhs_src: the neighbor in RHS that led us here
+        input_src: the corresponding node in Input for rhs_src
+        """
         nonlocal next_new_id
         nonlocal created_nodes_count
+        
         if rhs_id in rhs_new_to_input:
             return rhs_new_to_input[rhs_id]
-        in_pos      = G_in.nodes.get(input_src, {})
-        new_x = float(in_pos.get("x", 0.0)) 
-        new_y = float(in_pos.get("y", 0.0)) 
+        
+        # Position logic:
+        # We want the vector (rhs_src -> rhs_id) to be applied to input_src.
+        
+        # 1. Get position of input anchor
+        src_x, src_y = get_pos(G_in, input_src)
+        
+        # 2. Get vector in RHS
+        rhs_src_x, rhs_src_y = get_pos(G_rhs, rhs_src)
+        rhs_target_x, rhs_target_y = get_pos(G_rhs, rhs_id)
+        
+        dx = rhs_target_x - rhs_src_x
+        dy = rhs_target_y - rhs_src_y
+        
+        # 3. Apply vector
+        new_x = src_x + dx
+        new_y = src_y + dy
+        
         new_id = next_new_id
         next_new_id += 1
         created_nodes_count += 1
-        if not rhs_src and not input_src:
-            G_in.add_node(new_id, x=new_x, y=new_y)
-            return new_id
-        rhs_pos     = G_rhs.nodes.get(rhs_src, {})
-        rhs_nbr_pos = G_rhs.nodes.get(rhs_id,  {})
         
-
-        dx = float(rhs_nbr_pos.get("x", 0.0)) - float(rhs_pos.get("x", 0.0))
-        dy = float(rhs_nbr_pos.get("y", 0.0)) - float(rhs_pos.get("y", 0.0))
-
-        new_x += new_x + dx
-        new_y += new_y + dy
-
-        
-
         G_in.add_node(new_id, x=new_x, y=new_y)
         rhs_new_to_input[rhs_id] = new_id
-        logger.info(
-            "Created input node %s from RHS %s (src rhs=%s,input=%s) at (%.3f, %.3f)",
-            new_id, rhs_id, rhs_src, input_src, new_x, new_y,
-        )
-       
         
-
+        logger.info(
+            "Created input node %s from RHS %s (neighbor of %s) at (%.3f, %.3f)",
+            new_id, rhs_id, rhs_src, new_x, new_y,
+        )
         return new_id
 
-    # --- Main logic ----------------------------------------------------------
+    # --- Main logic: Preservation & BFS Expansion ----------------------------
 
     for lhs_id in list(G_lhs.nodes):
-
         input_id = lhs_to_input.get(lhs_id)
         if input_id is None:
             continue  # unmapped LHS is ignored
@@ -206,17 +208,16 @@ def calculate(req: CalculateRequest):
 
             if rhs_start not in G_rhs:
                 continue
+            
+            # This RHS node is visited (it maps to an existing Input node)
+            visited_rhs.add(rhs_start)
 
             # BFS queue holds (rhs_current, input_current_anchor)
             queue = deque()
             queue.append((rhs_start, input_id))
-            visited_rhs: set = set()
-
+            
             while queue:
                 rhs_cur, input_cur = queue.popleft()
-                if rhs_cur in visited_rhs:
-                    continue
-                visited_rhs.add(rhs_cur)
 
                 # neighbors in RHS for expansion
                 if G_rhs.is_directed():
@@ -229,30 +230,102 @@ def calculate(req: CalculateRequest):
 
                     if lhs_nbr is None:
                         # RHS-only neighbor ⇒ create new input node relative to current anchor
-                        input_nbr = create_rhs_only_node(rhs_nbr, rhs_cur, input_cur)
-                        if ensure_edge(input_cur, input_nbr):
-                            added_edges_count += 1
-                            logger.info("Added edge %s -> %s (RHS-only neighbor)", input_cur, input_nbr)
-                        # expand frontier from this RHS neighbor with new input anchor
+                        # Only create/traverse if not already visited
                         if rhs_nbr not in visited_rhs:
+                            input_nbr = create_rhs_only_node(rhs_nbr, rhs_cur, input_cur)
+                            visited_rhs.add(rhs_nbr)
+                            if ensure_edge(input_cur, input_nbr):
+                                added_edges_count += 1
                             queue.append((rhs_nbr, input_nbr))
+                        else:
+                            # Already created via another path, just ensure edge
+                            input_nbr = rhs_new_to_input.get(rhs_nbr)
+                            # Or it might be a preserved node visited from "the other side"?
+                            if input_nbr is None:
+                                # It must be a preserved node then
+                                lhs_of_visited = rhs_to_lhs.get(rhs_nbr)
+                                if lhs_of_visited:
+                                    input_nbr = lhs_to_input.get(lhs_of_visited)
+                            
+                            if input_nbr is not None:
+                                if ensure_edge(input_cur, input_nbr):
+                                    added_edges_count += 1
                         continue
 
-                    # LHS → Input mapping exists
+                    # LHS → Input mapping exists (Preserved Node)
                     input_nbr = lhs_to_input.get(lhs_nbr)
                     if input_nbr is None:
                         continue
 
+                    # If neighbor is preserved node, just link and mark visited
+                    # (We generally don't BFS *through* preserved nodes to find *other* new nodes 
+                    # unless we want to traverse the whole graph, but basic SPO often implies 
+                    # expansion from boundary. Here we allow full traversal.)
+                    visited_rhs.add(rhs_nbr)
                     if ensure_edge(input_cur, input_nbr):
                         added_edges_count += 1
                         logger.info("Added edge %s -> %s (mapped neighbor)", input_cur, input_nbr)
-                    # expand frontier from mapped neighbor
-                    if rhs_nbr not in visited_rhs:
-                        queue.append((rhs_nbr, input_nbr))
-            for rhs_node in list(G_rhs.nodes):
-                if rhs_node not in visited_rhs:
-                    input_nbr = create_rhs_only_node( None, None,rhs_node)
-                    logger.info("Added node only rhs")
+
+    # --- Handle Orphaned RHS Nodes -------------------------------------------
+    # These are nodes that were not reached by BFS because they are disconnected
+    # from the preserved nodes in the RHS graph structure.
+    # We place them relative to the NEAREST preserved node (anchor) in RHS.
+
+    # 1. Collect potential anchors (RHS nodes that have Input equivalents)
+    anchors = []
+    for r_node in G_rhs.nodes:
+        if r_node in rhs_to_lhs:
+            l_node = rhs_to_lhs[r_node]
+            if l_node in lhs_to_input:
+                i_node = lhs_to_input[l_node]
+                if i_node in G_in:
+                    ax, ay = get_pos(G_rhs, r_node)
+                    anchors.append({
+                        'rhs_id': r_node,
+                        'input_id': i_node,
+                        'x': ax,
+                        'y': ay
+                    })
+
+    for rhs_node in list(G_rhs.nodes):
+        if rhs_node not in visited_rhs:
+            # Found an orphan
+            rx, ry = get_pos(G_rhs, rhs_node)
+            
+            # Find closest anchor
+            best_anchor = None
+            min_dist_sq = float('inf')
+            
+            if anchors:
+                for anc in anchors:
+                    dist_sq = (rx - anc['x'])**2 + (ry - anc['y'])**2
+                    if dist_sq < min_dist_sq:
+                        min_dist_sq = dist_sq
+                        best_anchor = anc
+            
+            # Generate new ID
+            new_id = next_new_id
+            next_new_id += 1
+            visited_rhs.add(rhs_node)
+            rhs_new_to_input[rhs_node] = new_id
+            created_nodes_count += 1
+            
+            if best_anchor:
+                # Calculate relative position
+                dx = rx - best_anchor['x']
+                dy = ry - best_anchor['y']
+                
+                # Apply to Input Anchor
+                anc_ix, anc_iy = get_pos(G_in, best_anchor['input_id'])
+                final_x = anc_ix + dx
+                final_y = anc_iy + dy
+                
+                G_in.add_node(new_id, x=final_x, y=final_y)
+                logger.info(f"Added orphan node {new_id} (from RHS {rhs_node}) relative to anchor {best_anchor['input_id']}")
+            else:
+                # No anchors available (total rewrite or empty input), use absolute
+                G_in.add_node(new_id, x=rx, y=ry)
+                logger.info(f"Added orphan node {new_id} (from RHS {rhs_node}) absolute position")
 
 
     # --- Convert back to node-link -------------------------------------------
