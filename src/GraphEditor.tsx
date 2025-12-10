@@ -47,6 +47,8 @@ export default function GraphEditor() {
   const [calcNodes, setCalcNodes] = useState<GraphNode[]>([])
   const [calcEdges, setCalcEdges] = useState<GraphEdge[]>([])
 
+  const [showHelp, setShowHelp] = useState(false)
+
   const onBackgroundClick = useCallback(
     (e: React.MouseEvent<SVGSVGElement>) => {
       // Left click adds a node at mouse position
@@ -247,8 +249,6 @@ export default function GraphEditor() {
     setMappingActive(true)
   }, [nodesLHS, nodes])
 
-  // LHS->Input mapping helpers can be re-added for controls as needed
-
   const pendingNode = useMemo(() => pendingFrom, [pendingFrom])
   const pendingNodeLHS = useMemo(() => pendingFromLHS, [pendingFromLHS])
   const currentLHSId = mappingActive ? mappingQueue[mappingIndex] : undefined
@@ -259,28 +259,64 @@ export default function GraphEditor() {
 
   return (
     <div className="graph-editor-root" onContextMenu={(e) => e.preventDefault()}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+        <h1 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 700, color: 'var(--text-color)' }}>SPO Rewriter</h1>
+        <button className="btn" onClick={() => setShowHelp(!showHelp)}>
+          {showHelp ? 'Hide Help' : 'Show Help'}
+        </button>
+      </div>
+
+      {showHelp && (
+        <div style={{
+          backgroundColor: 'var(--bg-secondary)',
+          padding: '1rem',
+          borderRadius: '0.5rem',
+          marginBottom: '1rem',
+          border: '1px solid var(--border-color)'
+        }}>
+          <h3 style={{ marginTop: 0, color: 'var(--accent-color)' }}>Instructions</h3>
+          <ul style={{ paddingLeft: '1.2rem', color: 'var(--text-secondary)' }}>
+            <li><strong>Left Click:</strong> Add a node.</li>
+            <li><strong>Right Click:</strong> Select a node to start a connection (click another node to finish).</li>
+            <li><strong>Workflow:</strong>
+              <ol>
+                <li>Draw the <strong>Input Graph</strong> (Top Left).</li>
+                <li>Draw the <strong>LHS Graph</strong> (Top Right) - the pattern to find.</li>
+                <li>Click <strong>Map LHS→Input</strong> to define where the pattern matches in the input.</li>
+                <li>Draw the <strong>RHS Graph</strong> (Bottom Right) - the replacement pattern.</li>
+                <li>Click <strong>Map RHS→LHS</strong> to define which nodes are preserved.</li>
+                <li>Click <strong>Calculate</strong> to see the result (Bottom Left).</li>
+              </ol>
+            </li>
+          </ul>
+        </div>
+      )}
+
       <div
         className="stage"
         style={{
           display: 'grid',
-          gridTemplateColumns: '7fr 3fr',
+          gridTemplateColumns: '2fr 1fr',
           gridTemplateRows: '1fr 1fr',
-          gap: 8,
+          gap: '1rem',
           height: '100%',
         }}
       >
         {/* Top-left: Input graph */}
         <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-            <strong>Input</strong>
+          <div className="panel-header">
+            <span className="panel-title">Input Graph</span>
+            <div style={{ display: 'flex', gap: '0.5rem', marginLeft: 'auto' }}>
+              <button className="btn" onClick={clearGraph}>Clear</button>
+              <button className="btn" onClick={exportNodeLinkJSON}>Export JSON</button>
+            </div>
           </div>
-          <div style={{ flex: 1, minHeight: 0 }}>
+          <div className="graph-container">
             <svg
               ref={svgRef}
               className="graph-canvas"
               onClick={onBackgroundClick}
               onContextMenu={onBackgroundContextMenu}
-              style={{ width: '100%', height: '100%', background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: 6, display: 'block' }}
             >
               <g>
                 {edges.map((e, idx) => {
@@ -294,7 +330,7 @@ export default function GraphEditor() {
                       y1={a.y}
                       x2={b.x}
                       y2={b.y}
-                      stroke="#555"
+                      stroke="var(--text-secondary)"
                       strokeWidth={2}
                     />
                   )
@@ -311,16 +347,16 @@ export default function GraphEditor() {
                   >
                     <circle
                       r={14}
-                      fill={usedInputIds.has(n.id) ? '#a7f3d0' : pendingNode === n.id ? '#ffd24d' : '#69c'}
-                      stroke={usedInputIds.has(n.id) ? '#059669' : pendingNode === n.id ? '#cc9a00' : '#2a5e83'}
+                      fill={usedInputIds.has(n.id) ? 'var(--node-mapped-fill)' : pendingNode === n.id ? 'var(--node-selected-fill)' : 'var(--node-fill)'}
+                      stroke={usedInputIds.has(n.id) ? 'var(--node-mapped-stroke)' : pendingNode === n.id ? 'var(--node-selected-stroke)' : 'var(--node-stroke)'}
                       strokeWidth={2}
                     />
                     <text
                       y={4}
                       textAnchor="middle"
                       fontSize={12}
-                      fill="#102a43"
-                      style={{ userSelect: 'none', pointerEvents: 'none' }}
+                      fill="#fff"
+                      style={{ userSelect: 'none', pointerEvents: 'none', fontWeight: 600 }}
                     >
                       {n.id}
                     </text>
@@ -333,22 +369,30 @@ export default function GraphEditor() {
 
         {/* Top-right: LHS graph */}
         <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-            <strong>LHS</strong>
-            <button onClick={startMapping} disabled={nodesLHS.length === 0 || nodes.length === 0 || mappingActive}>
-              Proceed
-            </button>
-            <button onClick={clearLHS} disabled={mappingActive}>Clear</button>
-            <span style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>
-              {mappingActive ? `map: ${mappingIndex + 1}/${mappingQueue.length}` : ''}
+          <div className="panel-header">
+            <span className="panel-title">LHS Pattern</span>
+            <div style={{ display: 'flex', gap: '0.5rem', marginLeft: 'auto' }}>
+              <button
+                className="btn btn-primary"
+                onClick={startMapping}
+                disabled={nodesLHS.length === 0 || nodes.length === 0 || mappingActive}
+              >
+                Map LHS→Input
+              </button>
+              <button className="btn" onClick={clearLHS} disabled={mappingActive}>Clear</button>
+            </div>
+          </div>
+          <div style={{ marginBottom: '0.5rem', height: '1.5rem' }}>
+            <span className="mapping-status">
+              {mappingActive ? `Mapping node ${currentLHSId} (${mappingIndex + 1}/${mappingQueue.length})` : ''}
             </span>
           </div>
-          <div style={{ flex: 1, minHeight: 0 }}>
+          <div className="graph-container">
             <svg
               ref={svgLHSRef}
+              className="graph-canvas"
               onClick={onLHSBackgroundClick}
               onContextMenu={onLHSBackgroundContextMenu}
-              style={{ width: '100%', height: '100%', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 4, display: 'block' }}
             >
               <g>
                 {edgesLHS.map((e, idx) => {
@@ -362,7 +406,7 @@ export default function GraphEditor() {
                       y1={a.y}
                       x2={b.x}
                       y2={b.y}
-                      stroke="#555"
+                      stroke="var(--text-secondary)"
                       strokeWidth={2}
                     />
                   )
@@ -380,7 +424,7 @@ export default function GraphEditor() {
                       onContextMenu={(e) => onLHSNodeContextMenu(n.id, e)}
                       onClick={(e) => {
                         e.stopPropagation()
-                        // If RHS mapping is active, map current RHS -> this LHS node
+                        // If RHS mapping is active, map current RHS → this LHS node
                         if (!mappingActiveRHS) return
                         const rhsId = currentRHSId
                         if (rhsId == null) return
@@ -400,16 +444,16 @@ export default function GraphEditor() {
                     >
                       <circle
                         r={14}
-                        fill={isCurrent || isPending ? '#ffd24d' : isUsedByRhs ? '#a7f3d0' : '#69c'}
-                        stroke={isCurrent || isPending ? '#cc9a00' : isUsedByRhs ? '#059669' : '#2a5e83'}
+                        fill={isCurrent || isPending ? 'var(--node-selected-fill)' : isUsedByRhs ? 'var(--node-mapped-fill)' : 'var(--node-fill)'}
+                        stroke={isCurrent || isPending ? 'var(--node-selected-stroke)' : isUsedByRhs ? 'var(--node-mapped-stroke)' : 'var(--node-stroke)'}
                         strokeWidth={2}
                       />
                       <text
                         y={4}
                         textAnchor="middle"
                         fontSize={12}
-                        fill="#102a43"
-                        style={{ userSelect: 'none', pointerEvents: 'none' }}
+                        fill="#fff"
+                        style={{ userSelect: 'none', pointerEvents: 'none', fontWeight: 600 }}
                       >
                         {n.id}
                       </text>
@@ -418,41 +462,18 @@ export default function GraphEditor() {
                 })}
               </g>
             </svg>
-            {/* Optional small preview for LHS->Input mapping */}
-            {Object.keys(mapping).length > 0 && (
-              <div style={{ marginTop: 6 }}>
-                <div style={{ fontSize: 12, color: '#374151', marginBottom: 4 }}>Mapping LHS → Input</div>
-                <pre
-                  style={{
-                    maxHeight: 120,
-                    overflow: 'auto',
-                    fontSize: 12,
-                    background: '#f3f4f6',
-                    padding: 8,
-                    borderRadius: 4,
-                    border: '1px solid #e5e7eb',
-                    margin: 0,
-                  }}
-                >
-{JSON.stringify(mapping, null, 2)}
-                </pre>
-              </div>
-            )}
           </div>
         </div>
 
-        {/* Bottom-left: Calculate button + Calculated graph preview */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <button onClick={onCalculate}>Calculate</button>
-            <button onClick={exportNodeLinkJSON}>Export Input JSON</button>
-            <button onClick={clearGraph}>Clear Input</button>
-            <div className="hint" style={{ marginLeft: 8 }}>
-              Lewy klik: dodaj • Prawy klik: połącz
-            </div>
+        {/* Bottom-left: Calculated Result */}
+        <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <div className="panel-header">
+            <span className="panel-title">Result</span>
+            <button className="btn btn-primary" onClick={onCalculate} style={{ marginLeft: 'auto' }}>
+              Calculate Rewrite
+            </button>
           </div>
-          <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: 6, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-            <div style={{ marginBottom: 6, fontWeight: 600 }}>Calculated</div>
+          <div className="graph-container">
             {(() => {
               const padding = 24
               const width = 600 // virtual canvas width for viewBox
@@ -472,7 +493,7 @@ export default function GraphEditor() {
               const translateY = padding - minY * scale
               return (
                 <svg
-                  style={{ width: '100%', height: '100%', flex: 1, background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: 6, display: 'block' }}
+                  className="graph-canvas"
                   viewBox={`0 0 ${width} ${height}`}
                   preserveAspectRatio="xMidYMid meet"
                 >
@@ -489,7 +510,7 @@ export default function GraphEditor() {
                             y1={a.y}
                             x2={b.x}
                             y2={b.y}
-                            stroke="#6b7280"
+                            stroke="var(--text-secondary)"
                             strokeWidth={2 / scale}
                           />
                         )
@@ -498,8 +519,8 @@ export default function GraphEditor() {
                     <g>
                       {calcNodes.map((n) => (
                         <g key={`calc-${n.id}`} transform={`translate(${n.x}, ${n.y})`}>
-                          <circle r={12 / scale} fill="#93c5fd" stroke="#1d4ed8" strokeWidth={2 / scale} />
-                          <text y={4 / scale} textAnchor="middle" fontSize={11 / scale} fill="#0f172a" style={{ userSelect: 'none', pointerEvents: 'none' }}>
+                          <circle r={12 / scale} fill="var(--node-fill)" stroke="var(--node-stroke)" strokeWidth={2 / scale} />
+                          <text y={4 / scale} textAnchor="middle" fontSize={11 / scale} fill="#fff" style={{ userSelect: 'none', pointerEvents: 'none', fontWeight: 600 }}>
                             {n.id}
                           </text>
                         </g>
@@ -512,45 +533,79 @@ export default function GraphEditor() {
           </div>
         </div>
 
-        {/* Bottom-right: RHS graph with mapping RHS -> LHS */}
+        {/* Bottom-right: RHS graph with mapping RHS → LHS */}
         <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-            <strong>RHS</strong>
-            <button
-              onClick={() => {
-                if (nodesRHS.length === 0 || nodesLHS.length === 0) return
-                // ensure LHS->Input mapping is not active
-                setMappingActive(false)
-                setMappingQueue([])
-                setMappingIndex(0)
-                const queue = [...nodesRHS].sort((a, b) => a.id - b.id).map((n) => n.id)
-                setMappingRhsToLhs({})
-                setMappingQueueRHS(queue)
-                setMappingIndexRHS(0)
-                setMappingActiveRHS(true)
-              }}
-              disabled={nodesRHS.length === 0 || nodesLHS.length === 0 || mappingActiveRHS}
-            >
-              Proceed
-            </button>
-            <button
-              onClick={() => {
-                setNodesRHS([])
-                setEdgesRHS([])
-                setPendingFromRHS(null)
-                setNextIdRHS(1)
-              }}
-              disabled={mappingActiveRHS}
-            >
-              Clear
-            </button>
-            <span style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>
-              {mappingActiveRHS ? `map: ${mappingIndexRHS + 1}/${mappingQueueRHS.length}` : ''}
-            </span>
+          <div className="panel-header">
+            <span className="panel-title">RHS Replacement</span>
+            <div style={{ display: 'flex', gap: '0.5rem', marginLeft: 'auto' }}>
+              <button
+                className="btn btn-primary"
+                onClick={() => {
+                  if (nodesRHS.length === 0 || nodesLHS.length === 0) return
+                  // ensure LHS→Input mapping is not active
+                  setMappingActive(false)
+                  setMappingQueue([])
+                  setMappingIndex(0)
+                  const queue = [...nodesRHS].sort((a, b) => a.id - b.id).map((n) => n.id)
+                  setMappingRhsToLhs({})
+                  setMappingQueueRHS(queue)
+                  setMappingIndexRHS(0)
+                  setMappingActiveRHS(true)
+                }}
+                disabled={nodesRHS.length === 0 || nodesLHS.length === 0 || mappingActiveRHS}
+              >
+                Map RHS→LHS
+              </button>
+              <button
+                className="btn"
+                onClick={() => {
+                  setNodesRHS([])
+                  setEdgesRHS([])
+                  setPendingFromRHS(null)
+                  setNextIdRHS(1)
+                }}
+                disabled={mappingActiveRHS}
+              >
+                Clear
+              </button>
+            </div>
           </div>
-          <div style={{ flex: 1, minHeight: 0 }}>
+          <div style={{ marginBottom: '0.5rem', height: '1.5rem' }}>
+            {mappingActiveRHS ? (
+              <span className="mapping-status">
+                Map RHS node {currentRHSId} to LHS node...
+                <button
+                  className="btn"
+                  style={{ marginLeft: '0.5rem', padding: '0.1rem 0.5rem', fontSize: '0.75rem' }}
+                  onClick={() => {
+                    setMappingActiveRHS(false)
+                    setMappingQueueRHS([])
+                    setMappingIndexRHS(0)
+                    setMappingRhsToLhs({})
+                  }}
+                >
+                  Cancel
+                </button>
+              </span>
+            ) : Object.keys(mappingRhsToLhs).length > 0 ? (
+              <span style={{ color: 'var(--success-color)' }}>
+                Mapped {Object.keys(mappingRhsToLhs).length}/{nodesRHS.length} nodes
+                <button
+                  className="btn"
+                  style={{ marginLeft: '0.5rem', padding: '0.1rem 0.5rem', fontSize: '0.75rem' }}
+                  onClick={() => { setMappingRhsToLhs({}); }}
+                >
+                  Reset
+                </button>
+              </span>
+            ) : (
+              <span className="hint-text">Draw RHS, then map to LHS.</span>
+            )}
+          </div>
+          <div className="graph-container">
             <svg
               ref={svgRHSRef}
+              className="graph-canvas"
               onClick={(e) => {
                 if (e.button !== 0) return
                 const svg = svgRHSRef.current
@@ -565,7 +620,6 @@ export default function GraphEditor() {
                 e.preventDefault()
                 setPendingFromRHS(null)
               }}
-              style={{ width: '100%', height: '100%', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 4, display: 'block' }}
             >
               <g>
                 {edgesRHS.map((e, idx) => {
@@ -579,7 +633,7 @@ export default function GraphEditor() {
                       y1={a.y}
                       x2={b.x}
                       y2={b.y}
-                      stroke="#555"
+                      stroke="var(--text-secondary)"
                       strokeWidth={2}
                     />
                   )
@@ -611,16 +665,16 @@ export default function GraphEditor() {
                   >
                     <circle
                       r={14}
-                      fill={mappingActiveRHS && currentRHSId === n.id ? '#ffd24d' : pendingNodeRHS === n.id ? '#ffd24d' : '#69c'}
-                      stroke={mappingActiveRHS && currentRHSId === n.id ? '#cc9a00' : pendingNodeRHS === n.id ? '#cc9a00' : '#2a5e83'}
+                      fill={mappingActiveRHS && currentRHSId === n.id ? 'var(--node-selected-fill)' : pendingNodeRHS === n.id ? 'var(--node-selected-fill)' : 'var(--node-fill)'}
+                      stroke={mappingActiveRHS && currentRHSId === n.id ? 'var(--node-selected-stroke)' : pendingNodeRHS === n.id ? 'var(--node-selected-stroke)' : 'var(--node-stroke)'}
                       strokeWidth={2}
                     />
                     <text
                       y={4}
                       textAnchor="middle"
                       fontSize={12}
-                      fill="#102a43"
-                      style={{ userSelect: 'none', pointerEvents: 'none' }}
+                      fill="#fff"
+                      style={{ userSelect: 'none', pointerEvents: 'none', fontWeight: 600 }}
                     >
                       {n.id}
                     </text>
@@ -629,32 +683,6 @@ export default function GraphEditor() {
               </g>
             </svg>
           </div>
-          <div style={{ marginTop: 6 }}>
-            {mappingActiveRHS ? (
-              <>
-                <span style={{ color: '#5b21b6' }}>Wskaż odpowiednik w LHS dla RHS {currentRHSId}</span>
-                <button
-                  onClick={() => {
-                    setMappingActiveRHS(false)
-                    setMappingQueueRHS([])
-                    setMappingIndexRHS(0)
-                    setMappingRhsToLhs({})
-                  }}
-                  style={{ marginLeft: 8 }}
-                >
-                  Cancel
-                </button>
-              </>
-            ) : Object.keys(mappingRhsToLhs).length > 0 ? (
-              <>
-                <span>Zmapowano {Object.keys(mappingRhsToLhs).length}/{nodesRHS.length}</span>
-                <button onClick={() => { setMappingRhsToLhs({}); }} style={{ marginLeft: 8 }}>Reset</button>
-              </>
-            ) : (
-              <span style={{ color: '#6b7280' }}>Kliknij Proceed, a potem wskaż węzły w LHS.</span>
-            )}
-          </div>
-          {/* Removed Mapping RHS → LHS preview as requested */}
         </div>
       </div>
     </div>
