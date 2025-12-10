@@ -264,7 +264,7 @@ def calculate(req: CalculateRequest):
                     if rhs_nbr not in visited_rhs:
                         queue.append((rhs_nbr, input_nbr))
             for rhs_node in list(G_rhs.nodes):
-                if rhs_node not in visited_rhs and not rhs_node in set(rhs_to_lhs.keys()):
+                if rhs_node not in visited_rhs and not rhs_node in lhs_from_rhs:
                     input_nbr = create_rhs_only_node( None, None,rhs_node)
                     logger.info("Added node only rhs")
 
