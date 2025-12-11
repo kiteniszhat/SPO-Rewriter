@@ -231,6 +231,8 @@ def calculate(req: CalculateRequest):
 
 
     for lhs_id in list(G_lhs.nodes):
+        input_id = lhs_to_input.get(lhs_id)
+       
         if input_id is None:
             continue  # unmapped LHS is ignored
 
