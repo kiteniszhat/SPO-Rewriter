@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 import networkx as nx
 from networkx.readwrite import json_graph
 from collections import deque
-
+from fastapi import FastAPI, HTTPException
 NodeId = Union[int, str]
 
 
@@ -187,10 +187,50 @@ def calculate(req: CalculateRequest):
         return new_id
 
     # --- Main logic ----------------------------------------------------------
-
+     # --- Morphism ----------------------------------------------------------
     for lhs_id in list(G_lhs.nodes):
 
         input_id = lhs_to_input.get(lhs_id)
+        if input_id is None:
+            raise HTTPException(status_code=400, detail="error: lhs isn't fully mapped to input")
+        lhs_nbrs = G_lhs.neighbors(lhs_id)
+        lhs_nbrs_list = list(G_lhs.neighbors(lhs_id))
+        inp_nbrs_set = set(G_in.neighbors(input_id)) 
+        inp_lhs_nbrs_mapped = {lhs_to_input.get(l) for l in lhs_nbrs_list if lhs_to_input.get(l) is not None}
+        print(f"LHS {lhs_id} mapped to input {input_id}")
+        print(f"Mapped LHS neighbors -> input ids: {sorted(inp_lhs_nbrs_mapped)}")
+        print(f"Input neighbors of {input_id}: {sorted(inp_nbrs_set)}")
+        #neighbors matching
+        if not inp_lhs_nbrs_mapped.issubset(inp_nbrs_set):
+            raise HTTPException(status_code=400, detail="error: no morphism")
+        
+
+        # more edges than in input graph
+        #to 
+        for l in lhs_nbrs:
+            print(l)
+            i = lhs_to_input.get(l)
+            print(f"mapped to {i}, {input_id}")
+            if G_in.has_edge(i,input_id) or  G_in.has_edge(input_id,i):
+                print("true")
+                continue
+            else:
+                raise HTTPException(status_code=400, detail="error: no morphism")
+        #to chyba nie jest potrzebne ale coz szkodzi obiecac, załatwia to już neighbors matching
+
+
+        #less edges than in input graph
+        for l in list(G_lhs.nodes):
+            if l == lhs_id:
+                pass
+            i = lhs_to_input.get(l)
+            if G_in.has_edge(input_id,i):
+                if not G_lhs.has_edge(lhs_id,l):
+                    raise HTTPException(status_code=400, detail="error: no morphism")
+      # --- Morphism - end ---------------------------------------------------------     
+
+
+    for lhs_id in list(G_lhs.nodes):
         if input_id is None:
             continue  # unmapped LHS is ignored
 
@@ -224,7 +264,7 @@ def calculate(req: CalculateRequest):
                     neighbors_iter = G_rhs.successors(rhs_cur)
                 else:
                     neighbors_iter = G_rhs.neighbors(rhs_cur)
-                # Compare neighbor counts using degree APIs (iterators don't have length)
+                # Compare neighbor counts using degree
                 try:
                     if G_rhs.is_directed():
                         rhs_deg = G_rhs.out_degree(rhs_cur)
