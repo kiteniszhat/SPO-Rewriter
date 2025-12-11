@@ -470,7 +470,7 @@ export default function GraphEditor() {
           <div className="panel-header">
             <span className="panel-title">Result</span>
             <button className="btn btn-primary" onClick={onCalculate} style={{ marginLeft: 'auto' }}>
-              Calculate Rewrite
+              Calculate 
             </button>
           </div>
           <div className="graph-container">
