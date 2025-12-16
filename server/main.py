@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 import networkx as nx
 from networkx.readwrite import json_graph
 from collections import deque
-
+from fastapi import FastAPI, HTTPException
 NodeId = Union[int, str]
 
 
@@ -131,6 +131,7 @@ def calculate(req: CalculateRequest):
     created_nodes_count = 0
     removed_nodes_count = 0
     added_edges_count = 0
+    removed_edges_count_edges = 0
 
     # --- Helper functions -----------------------------------------------------
 
@@ -186,10 +187,52 @@ def calculate(req: CalculateRequest):
         return new_id
 
     # --- Main logic ----------------------------------------------------------
-
+     # --- Morphism ----------------------------------------------------------
     for lhs_id in list(G_lhs.nodes):
 
         input_id = lhs_to_input.get(lhs_id)
+        if input_id is None:
+            raise HTTPException(status_code=400, detail="error: lhs isn't fully mapped to input")
+        lhs_nbrs = G_lhs.neighbors(lhs_id)
+        lhs_nbrs_list = list(G_lhs.neighbors(lhs_id))
+        inp_nbrs_set = set(G_in.neighbors(input_id)) 
+        inp_lhs_nbrs_mapped = {lhs_to_input.get(l) for l in lhs_nbrs_list if lhs_to_input.get(l) is not None}
+        print(f"LHS {lhs_id} mapped to input {input_id}")
+        print(f"Mapped LHS neighbors -> input ids: {sorted(inp_lhs_nbrs_mapped)}")
+        print(f"Input neighbors of {input_id}: {sorted(inp_nbrs_set)}")
+        #neighbors matching
+        if not inp_lhs_nbrs_mapped.issubset(inp_nbrs_set):
+            raise HTTPException(status_code=400, detail="error: no morphism")
+        
+
+        # more edges than in input graph
+        #to 
+        for l in lhs_nbrs:
+            print(l)
+            i = lhs_to_input.get(l)
+            print(f"mapped to {i}, {input_id}")
+            if G_in.has_edge(i,input_id) or  G_in.has_edge(input_id,i):
+                print("true")
+                continue
+            else:
+                raise HTTPException(status_code=400, detail="error: no morphism")
+        #to chyba nie jest potrzebne ale coz szkodzi obiecac, załatwia to już neighbors matching
+
+
+        #less edges than in input graph
+        for l in list(G_lhs.nodes):
+            if l == lhs_id:
+                pass
+            i = lhs_to_input.get(l)
+            if G_in.has_edge(input_id,i):
+                if not G_lhs.has_edge(lhs_id,l):
+                    raise HTTPException(status_code=400, detail="error: no morphism")
+      # --- Morphism - end ---------------------------------------------------------     
+
+
+    for lhs_id in list(G_lhs.nodes):
+        input_id = lhs_to_input.get(lhs_id)
+       
         if input_id is None:
             continue  # unmapped LHS is ignored
 
@@ -223,7 +266,20 @@ def calculate(req: CalculateRequest):
                     neighbors_iter = G_rhs.successors(rhs_cur)
                 else:
                     neighbors_iter = G_rhs.neighbors(rhs_cur)
-
+                # Compare neighbor counts using degree
+                try:
+                    if G_rhs.is_directed():
+                        rhs_deg = G_rhs.out_degree(rhs_cur)
+                        in_deg = G_in.out_degree(input_cur)
+                    else:
+                        rhs_deg = G_rhs.degree(rhs_cur)
+                        in_deg = G_in.degree(input_cur)
+                    # Optional: keep for diagnostics if needed
+                    # logger.debug("Degree compare rhs=%s(%d) input=%s(%d)", rhs_cur, rhs_deg, input_cur, in_deg)
+                except Exception:
+                    rhs_deg = None
+                    in_deg = None
+                
                 for rhs_nbr in neighbors_iter:
                     lhs_nbr = rhs_to_lhs.get(rhs_nbr)
 
@@ -250,9 +306,59 @@ def calculate(req: CalculateRequest):
                     if rhs_nbr not in visited_rhs:
                         queue.append((rhs_nbr, input_nbr))
             for rhs_node in list(G_rhs.nodes):
-                if rhs_node not in visited_rhs:
+                if rhs_node not in visited_rhs and not rhs_node in lhs_from_rhs:
                     input_nbr = create_rhs_only_node( None, None,rhs_node)
                     logger.info("Added node only rhs")
+
+    # --- Remove edges that were in LHS but disappeared in RHS ---
+    # For each LHS edge (lu, lv), if mapped input endpoints exist but no
+    # corresponding RHS edge between any rhs mapped to lu and lv, remove the input edge.
+    for lu, lv in G_lhs.edges():
+        in_u = lhs_to_input.get(lu)
+        in_v = lhs_to_input.get(lv)
+        if in_u is None or in_v is None:
+            continue
+
+        rhs_us = lhs_from_rhs.get(lu, [])
+        rhs_vs = lhs_from_rhs.get(lv, [])
+        # Determine if any RHS pair has an edge
+        rhs_has_edge = False
+        if not G_rhs.is_directed():
+            for ru in rhs_us:
+                for rv in rhs_vs:
+                    if G_rhs.has_edge(ru, rv):
+                        rhs_has_edge = True
+                        break
+                if rhs_has_edge:
+                    break
+        else:
+            for ru in rhs_us:
+                for rv in rhs_vs:
+                    if G_rhs.has_edge(ru, rv) or G_rhs.has_edge(rv, ru):
+                        rhs_has_edge = True
+                        break
+                if rhs_has_edge:
+                    break
+
+        # If RHS lacks the edge, remove corresponding input edge if present
+        if not rhs_has_edge:
+            try:
+                if G_in.is_directed():
+                    if G_in.has_edge(in_u, in_v):
+                        G_in.remove_edge(in_u, in_v)
+                        removed_edges_count_edges += 1
+                        logger.info("Removed input edge %s -> %s (LHS edge disappeared in RHS)", in_u, in_v)
+                else:
+                    if G_in.has_edge(in_u, in_v):
+                        G_in.remove_edge(in_u, in_v)
+                        removed_edges_count_edges += 1
+                        logger.info("Removed input edge %s -- %s (LHS edge disappeared in RHS)", in_u, in_v)
+                    elif G_in.has_edge(in_v, in_u):
+                        G_in.remove_edge(in_v, in_u)
+                        removed_edges_count_edges += 1
+                        logger.info("Removed input edge %s -- %s (LHS edge disappeared in RHS)", in_v, in_u)
+            except Exception as exc:
+                logger.warning("Failed removing mapped input edge %s-%s: %s", in_u, in_v, exc)
 
 
     # --- Convert back to node-link -------------------------------------------
@@ -262,8 +368,8 @@ def calculate(req: CalculateRequest):
     links = [Link(source=l["source"], target=l["target"]) for l in data["links"]]
 
     logger.info(
-        "Result: nodes=%d edges=%d | created_nodes=%d removed_nodes=%d added_edges=%d",
-        len(nodes), len(links), created_nodes_count, removed_nodes_count, added_edges_count,
+        "Result: nodes=%d edges=%d | created_nodes=%d removed_nodes=%d added_edges=%d removed_edges=%d",
+        len(nodes), len(links), created_nodes_count, removed_nodes_count, added_edges_count, removed_edges_count_edges,
     )
 
     return CalculateResponseGraph(
