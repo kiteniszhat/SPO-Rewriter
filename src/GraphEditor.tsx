@@ -257,6 +257,83 @@ export default function GraphEditor() {
   const currentRHSId = mappingActiveRHS ? mappingQueueRHS[mappingIndexRHS] : undefined
   const pendingNodeRHS = useMemo(() => pendingFromRHS, [pendingFromRHS])
 
+  // Move Result as Input: Replace input graph with result and clear everything else
+  const moveResultAsInput = useCallback(() => {
+    if (calcNodes.length === 0) return
+
+    // 1. Calculate boundaries and scale to fit Input graph area
+    const xs = calcNodes.map((n) => n.x)
+    const ys = calcNodes.map((n) => n.y)
+    const minX = Math.min(...xs)
+    const maxX = Math.max(...xs)
+    const minY = Math.min(...ys)
+    const maxY = Math.max(...ys)
+
+    let contentW = maxX - minX
+    let contentH = maxY - minY
+    if (contentW === 0) contentW = 1
+    if (contentH === 0) contentH = 1
+
+    // Get input SVG dimensions
+    let svgW = 600
+    let svgH = 400
+    if (svgRef.current) {
+      const rect = svgRef.current.getBoundingClientRect()
+      svgW = rect.width
+      svgH = rect.height
+    }
+
+    const padding = 40
+    const availableW = Math.max(1, svgW - padding * 2)
+    const availableH = Math.max(1, svgH - padding * 2)
+
+    const scaleX = availableW / contentW
+    const scaleY = availableH / contentH
+    // Use the smaller scale to fit entirely, but don't blow up tiny graphs too much (optional: remove Math.min(..., 1) if we always want to fill)
+    // User requested "map to size of input board", suggesting we should fit it.
+    const scale = Math.min(scaleX, scaleY)
+
+    const newNodes = calcNodes.map((n) => ({
+      id: n.id,
+      x: padding + (n.x - minX) * scale,
+      y: padding + (n.y - minY) * scale,
+    }))
+
+    // 2. Set Input Graph from Result (Scaled)
+    setNodes(newNodes)
+    setEdges(calcEdges)
+    const maxId = newNodes.reduce((max, n) => Math.max(max, n.id), 0)
+    setNextId(maxId + 1)
+    setPendingFrom(null)
+
+    // 3. Clear LHS
+    setNodesLHS([])
+    setEdgesLHS([])
+    setPendingFromLHS(null)
+    setNextIdLHS(1)
+
+    // 4. Clear RHS
+    setNodesRHS([])
+    setEdgesRHS([])
+    setPendingFromRHS(null)
+    setNextIdRHS(1)
+
+    // 5. Clear Mappings
+    setMappingActive(false)
+    setMappingQueue([])
+    setMappingIndex(0)
+    setMapping({})
+
+    setMappingActiveRHS(false)
+    setMappingQueueRHS([])
+    setMappingIndexRHS(0)
+    setMappingRhsToLhs({})
+
+    // 6. Clear Result
+    setCalcNodes([])
+    setCalcEdges([])
+  }, [calcNodes, calcEdges])
+
   return (
     <div className="graph-editor-root" onContextMenu={(e) => e.preventDefault()}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
@@ -286,6 +363,7 @@ export default function GraphEditor() {
                 <li>Draw the <strong>RHS Graph</strong> (Bottom Right) - the replacement pattern.</li>
                 <li>Click <strong>Map RHS→LHS</strong> to define which nodes are preserved.</li>
                 <li>Click <strong>Calculate</strong> to see the result (Bottom Left).</li>
+                <li>Click <strong>Move Result as Input</strong> to use the result as the next input and continue rewriting.</li>
               </ol>
             </li>
           </ul>
@@ -469,9 +547,19 @@ export default function GraphEditor() {
         <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           <div className="panel-header">
             <span className="panel-title">Result</span>
-            <button className="btn btn-primary" onClick={onCalculate} style={{ marginLeft: 'auto' }}>
-              Calculate Rewrite
-            </button>
+            <div style={{ display: 'flex', gap: '0.5rem', marginLeft: 'auto' }}>
+              <button
+                className="btn"
+                onClick={moveResultAsInput}
+                disabled={calcNodes.length === 0}
+                title="Use this result as the new Input Graph and clear patterns"
+              >
+                Move Result as Input
+              </button>
+              <button className="btn btn-primary" onClick={onCalculate}>
+                Calculate Rewrite
+              </button>
+            </div>
           </div>
           <div className="graph-container">
             {(() => {
