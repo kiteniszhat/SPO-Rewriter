@@ -178,8 +178,12 @@ export default function GraphEditor() {
     URL.revokeObjectURL(url)
   }, [nodes, edges])
 
+  // Error handling
+  const [error, setError] = useState<string | null>(null)
+
   // Calculate: send graphs + mappings to backend and render returned graph in bottom-left
   const onCalculate = useCallback(async () => {
+    setError(null)
     const body = {
       mapping_lhs_to_input: mapping,
       mapping_rhs_to_lhs: mappingRhsToLhs,
@@ -211,14 +215,25 @@ export default function GraphEditor() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      if (!res.ok) {
+        let errorMsg = `HTTP ${res.status}`
+        try {
+          const errData = await res.json()
+          if (errData && errData.detail) {
+            errorMsg = errData.detail
+          }
+        } catch (e) {
+        }
+        throw new Error(errorMsg)
+      }
       const data = await res.json()
       const rNodes = Array.isArray(data.nodes) ? data.nodes : []
       const rLinks = Array.isArray(data.links) ? data.links : []
       setCalcNodes(rNodes.map((n: any) => ({ id: Number(n.id ?? n), x: n.x ?? 0, y: n.y ?? 0 })))
       setCalcEdges(rLinks.map((l: any) => ({ source: Number(l.source), target: Number(l.target) })))
-    } catch (err) {
+    } catch (err: any) {
       console.error('Calculate failed', err)
+      setError(err.message || 'Unknown error occurred')
     }
   }, [mapping, mappingRhsToLhs, nodes, edges, nodesLHS, edgesLHS, nodesRHS, edgesRHS])
 
@@ -332,6 +347,8 @@ export default function GraphEditor() {
     // 6. Clear Result
     setCalcNodes([])
     setCalcEdges([])
+    // Clear error
+    setError(null)
   }, [calcNodes, calcEdges])
 
   return (
@@ -561,6 +578,19 @@ export default function GraphEditor() {
               </button>
             </div>
           </div>
+          {error && (
+            <div style={{
+              backgroundColor: 'rgba(255, 0, 0, 0.1)',
+              border: '1px solid var(--error-color, red)',
+              color: 'var(--error-color, red)',
+              padding: '0.5rem',
+              borderRadius: '0.25rem',
+              marginBottom: '0.5rem',
+              fontSize: '0.9rem'
+            }}>
+              <strong>Error:</strong> {error}
+            </div>
+          )}
           <div className="graph-container">
             {(() => {
               const padding = 24
