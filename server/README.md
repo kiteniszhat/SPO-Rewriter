@@ -30,22 +30,22 @@ $body = @{
   mapping_lhs_to_input = @{ "1" = 4; "2" = 2 }
   mapping_rhs_to_lhs = @{ "10" = 1; "20" = 2 }
   graph_input = @{
-    directed = $false
-    multigraph = $false
+  
+    
     graph = @{}
     nodes = @(@{ id = 1; x = 100; y = 120 }, @{ id = 2; x = 220; y = 160 }, @{ id = 4; x = 80; y = 60 })
     links = @(@{ source = 1; target = 2 }, @{ source = 4; target = 2 })
   }
   graph_lhs = @{
-    directed = $false
-    multigraph = $false
+   
+    
     graph = @{}
     nodes = @(@{ id = 1; x = 10; y = 12 }, @{ id = 2; x = 22; y = 16 })
     links = @(@{ source = 1; target = 2 })
   }
   graph_rhs = @{
-    directed = $false
-    multigraph = $false
+   
+    
     graph = @{}
     nodes = @(@{ id = 10; x = 5; y = 8 }, @{ id = 20; x = 12; y = 14 })
     links = @(@{ source = 10; target = 20 })

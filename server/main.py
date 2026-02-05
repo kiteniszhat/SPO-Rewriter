@@ -13,8 +13,8 @@ NodeId = Union[int, str]
 
 class Node(BaseModel):
     id: NodeId
-    x: Optional[float] = None
-    y: Optional[float] = None
+    x: float|None = None
+    y: float|None = None
 
 
 class Link(BaseModel):
@@ -23,22 +23,16 @@ class Link(BaseModel):
 
 
 class NodeLinkGraph(BaseModel):
-    directed: Optional[bool] = False
-    multigraph: Optional[bool] = False
-    graph: Dict = Field(default_factory=dict)
+    graph: Dict = Field(default_factory=dict) 
     nodes: List[Node] = Field(default_factory=list)
     links: List[Link] = Field(default_factory=list)
-
     def to_networkx(self) -> nx.Graph:
         data = {
-            "directed": self.directed,
-            "multigraph": self.multigraph,
             "graph": self.graph,
             "nodes": [n.model_dump() for n in self.nodes],
             "links": [e.model_dump() for e in self.links],
         }
-        return json_graph.node_link_graph(data, directed=self.directed, multigraph=self.multigraph)
-
+        return json_graph.node_link_graph(data)
 
 class CalculateRequest(BaseModel):
     mapping_lhs_to_input: Dict[NodeId, NodeId] = Field(default_factory=dict)
@@ -46,14 +40,9 @@ class CalculateRequest(BaseModel):
     graph_input: NodeLinkGraph
     graph_lhs: NodeLinkGraph
     graph_rhs: NodeLinkGraph
-
-
-class CalculateResponseGraph(NodeLinkGraph):
-    pass
-
+    
 
 app = FastAPI(title="Graph Calculate API")
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -73,19 +62,20 @@ if not logger.handlers:
     logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
-def _norm_nodeid(n):
-    # keep ints as-is, convert numeric strings to int, leave other strings unchanged
-    if isinstance(n, int):
-        return n
-    if isinstance(n, str):
-        try:
-            return int(n)
-        except ValueError:
+def _norm_ids(mapping: Dict[NodeId,NodeId])->Dict:
+    # normalize ids to int if possible
+    def _to_int_helper(n:NodeId)->NodeId:
+        if isinstance(n, int):
             return n
-    return n
-@app.post("/calculate", response_model=CalculateResponseGraph)
-def calculate(req: CalculateRequest):
-    # Log request summary
+        if isinstance(n, str):
+            try:
+                return int(n)
+            except ValueError:
+                return n
+        return n
+    return {_to_int_helper(n1): _to_int_helper(n2) for n1,n2 in mapping.items()}
+@app.post("/calculate")
+def calculate(req: CalculateRequest) -> NodeLinkGraph:
     try:
         logger.info(
             "Request: input nodes=%d edges=%d | lhs nodes=%d edges=%d | rhs nodes=%d edges=%d",
@@ -106,14 +96,8 @@ def calculate(req: CalculateRequest):
     G_lhs = req.graph_lhs.to_networkx()
     G_rhs = req.graph_rhs.to_networkx()
 
-
-    # normalize mappings coming from JSON (keys are usually strings)
-    lhs_to_input = { _norm_nodeid(k): _norm_nodeid(v) for k, v in req.mapping_lhs_to_input.items() }
-    rhs_to_lhs   = { _norm_nodeid(k): _norm_nodeid(v) for k, v in req.mapping_rhs_to_lhs.items() }
-    logger.info("Normalized mappings sizes: lhs->input=%d rhs->lhs=%d", len(lhs_to_input), len(rhs_to_lhs))
-
-    # lhs_to_input = dict(req.mapping_lhs_to_input)
-    # rhs_to_lhs   = dict(req.mapping_rhs_to_lhs)
+    lhs_to_input = _norm_ids(req.mapping_lhs_to_input)
+    rhs_to_lhs   = _norm_ids(req.mapping_rhs_to_lhs)
 
     # Reverse map: LHS → list of RHS nodes that map to it
     lhs_from_rhs = {}
@@ -136,15 +120,10 @@ def calculate(req: CalculateRequest):
     # --- Helper functions -----------------------------------------------------
 
     def ensure_edge(u, v):
-        """Add edge if missing (handles directed/undirected)."""
-        if G_in.is_directed():
-            if not G_in.has_edge(u, v):
-                G_in.add_edge(u, v)
-                return True
-        else:
-            if not G_in.has_edge(u, v) and not G_in.has_edge(v, u):
-                G_in.add_edge(u, v)
-                return True
+        """Add edge if missing """
+        if not G_in.has_edge(u, v) and not G_in.has_edge(v, u):
+            G_in.add_edge(u, v)
+            return True
         return False
 
     def create_rhs_only_node(rhs_id, rhs_src, input_src):
@@ -262,18 +241,13 @@ def calculate(req: CalculateRequest):
                 visited_rhs.add(rhs_cur)
 
                 # neighbors in RHS for expansion
-                if G_rhs.is_directed():
-                    neighbors_iter = G_rhs.successors(rhs_cur)
-                else:
-                    neighbors_iter = G_rhs.neighbors(rhs_cur)
+            
+                neighbors_iter = G_rhs.neighbors(rhs_cur)
                 # Compare neighbor counts using degree
                 try:
-                    if G_rhs.is_directed():
-                        rhs_deg = G_rhs.out_degree(rhs_cur)
-                        in_deg = G_in.out_degree(input_cur)
-                    else:
-                        rhs_deg = G_rhs.degree(rhs_cur)
-                        in_deg = G_in.degree(input_cur)
+                    
+                    rhs_deg = G_rhs.degree(rhs_cur)
+                    in_deg = G_in.degree(input_cur)
                     # Optional: keep for diagnostics if needed
                     # logger.debug("Degree compare rhs=%s(%d) input=%s(%d)", rhs_cur, rhs_deg, input_cur, in_deg)
                 except Exception:
@@ -323,47 +297,35 @@ def calculate(req: CalculateRequest):
         rhs_vs = lhs_from_rhs.get(lv, [])
         # Determine if any RHS pair has an edge
         rhs_has_edge = False
-        if not G_rhs.is_directed():
-            for ru in rhs_us:
-                for rv in rhs_vs:
-                    if G_rhs.has_edge(ru, rv):
-                        rhs_has_edge = True
-                        break
-                if rhs_has_edge:
+        
+        for ru in rhs_us:
+            for rv in rhs_vs:
+                if G_rhs.has_edge(ru, rv):
+                    rhs_has_edge = True
                     break
-        else:
-            for ru in rhs_us:
-                for rv in rhs_vs:
-                    if G_rhs.has_edge(ru, rv) or G_rhs.has_edge(rv, ru):
-                        rhs_has_edge = True
-                        break
-                if rhs_has_edge:
-                    break
+            if rhs_has_edge:
+                break
+        
 
         # If RHS lacks the edge, remove corresponding input edge if present
         if not rhs_has_edge:
             try:
-                if G_in.is_directed():
-                    if G_in.has_edge(in_u, in_v):
-                        G_in.remove_edge(in_u, in_v)
-                        removed_edges_count_edges += 1
-                        logger.info("Removed input edge %s -> %s (LHS edge disappeared in RHS)", in_u, in_v)
-                else:
-                    if G_in.has_edge(in_u, in_v):
-                        G_in.remove_edge(in_u, in_v)
-                        removed_edges_count_edges += 1
-                        logger.info("Removed input edge %s -- %s (LHS edge disappeared in RHS)", in_u, in_v)
-                    elif G_in.has_edge(in_v, in_u):
-                        G_in.remove_edge(in_v, in_u)
-                        removed_edges_count_edges += 1
-                        logger.info("Removed input edge %s -- %s (LHS edge disappeared in RHS)", in_v, in_u)
+                
+                if G_in.has_edge(in_u, in_v):
+                    G_in.remove_edge(in_u, in_v)
+                    removed_edges_count_edges += 1
+                    logger.info("Removed input edge %s -- %s (LHS edge disappeared in RHS)", in_u, in_v)
+                elif G_in.has_edge(in_v, in_u):
+                    G_in.remove_edge(in_v, in_u)
+                    removed_edges_count_edges += 1
+                    logger.info("Removed input edge %s -- %s (LHS edge disappeared in RHS)", in_v, in_u)
             except Exception as exc:
                 logger.warning("Failed removing mapped input edge %s-%s: %s", in_u, in_v, exc)
 
 
     # --- Convert back to node-link -------------------------------------------
 
-    data = json_graph.node_link_data(G_in)
+    data = json_graph.node_link_graph(G_in)
     nodes = [Node(id=n["id"], x=n.get("x"), y=n.get("y")) for n in data["nodes"]]
     links = [Link(source=l["source"], target=l["target"]) for l in data["links"]]
 
@@ -372,9 +334,8 @@ def calculate(req: CalculateRequest):
         len(nodes), len(links), created_nodes_count, removed_nodes_count, added_edges_count, removed_edges_count_edges,
     )
 
-    return CalculateResponseGraph(
-        directed=data.get("directed", False),
-        multigraph=data.get("multigraph", False),
+    return NodeLinkGraph(
+        
         graph=data.get("graph", {}),
         nodes=nodes,
         links=links,

@@ -1,17 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
+import type {NodeId,GraphNode,GraphEdge} from "./Types"
 
-type NodeId = number
-
-type GraphNode = {
-  id: NodeId
-  x: number
-  y: number
-}
-
-type GraphEdge = {
-  source: NodeId
-  target: NodeId
-}
 
 export default function GraphEditor() {
   const [nodes, setNodes] = useState<GraphNode[]>([])
@@ -72,32 +61,36 @@ export default function GraphEditor() {
     setPendingFrom(null)
   }, [])
 
-  const connectNodes = useCallback((a: NodeId, b: NodeId) => {
-    if (a === b) return
-    setEdges((prev) => {
-      const exists = prev.some(
-        (ed) => (ed.source === a && ed.target === b) || (ed.source === b && ed.target === a)
-      )
-      if (exists) return prev
-      return [...prev, { source: a, target: b }]
-    })
-  }, [])
+  const connectNodes = (a: NodeId, b: NodeId) => {
+  if (a === b) return
+  setEdges((prev) => {
+    const idx = prev.findIndex(
+      (ed) => (ed.source === a && ed.target === b) || (ed.source === b && ed.target === a)
+    )
+    
+    if (idx !== -1) {
+      const next = [...prev]
+      next.splice(idx, 1)
+      return next
+    }
+    return [...prev, { source: a, target: b }]
+  })}
 
-  const onNodeContextMenu = useCallback(
-    (nodeId: NodeId, e: React.MouseEvent) => {
-      // Right click selects first node or completes an edge to second node
-      e.preventDefault()
-      e.stopPropagation()
-      if (mappingActive) return
-      setPendingFrom((from) => {
-        if (from == null) return nodeId
-        if (from === nodeId) return null // toggle off
-        connectNodes(from, nodeId)
-        return null
-      })
-    },
-    [connectNodes, mappingActive]
-  )
+const onNodeContextMenu = 
+  (nodeId: NodeId, e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (mappingActive) return
+    
+    if(pendingFrom===null) setPendingFrom(nodeId)
+    else if(pendingFrom===nodeId) setPendingFrom(null)
+    else 
+    { 
+      connectNodes(pendingFrom,nodeId)
+      setPendingFrom(null)
+    }
+  }
+
   const onInputNodeClick = useCallback(
     (nodeId: NodeId, e: React.MouseEvent) => {
       // Prevent background click; handle mapping selection if active
@@ -163,8 +156,7 @@ export default function GraphEditor() {
 
   const exportNodeLinkJSON = useCallback(() => {
     const data = {
-      directed: false,
-      multigraph: false,
+      
       graph: {},
       nodes: nodes.map((n) => ({ id: n.id, x: n.x, y: n.y })),
       links: edges.map((e) => ({ source: e.source, target: e.target })),
@@ -188,22 +180,19 @@ export default function GraphEditor() {
       mapping_lhs_to_input: mapping,
       mapping_rhs_to_lhs: mappingRhsToLhs,
       graph_input: {
-        directed: false,
-        multigraph: false,
+        
         graph: {},
         nodes: nodes.map((n) => ({ id: n.id, x: n.x, y: n.y })),
         links: edges.map((e) => ({ source: e.source, target: e.target })),
       },
       graph_lhs: {
-        directed: false,
-        multigraph: false,
+        
         graph: {},
         nodes: nodesLHS.map((n) => ({ id: n.id, x: n.x, y: n.y })),
         links: edgesLHS.map((e) => ({ source: e.source, target: e.target })),
       },
       graph_rhs: {
-        directed: false,
-        multigraph: false,
+        
         graph: {},
         nodes: nodesRHS.map((n) => ({ id: n.id, x: n.x, y: n.y })),
         links: edgesRHS.map((e) => ({ source: e.source, target: e.target })),
