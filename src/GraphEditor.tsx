@@ -1,165 +1,58 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import type {NodeId,GraphNode,GraphEdge} from "./Types"
+import { useGraphState } from './hooks/useGraphState'
 
 
 export default function GraphEditor() {
-  const [nodes, setNodes] = useState<GraphNode[]>([])
-  const [edges, setEdges] = useState<GraphEdge[]>([])
-  const [pendingFrom, setPendingFrom] = useState<NodeId | null>(null)
-  const [nextId, setNextId] = useState<NodeId>(1)
+  const inputState = useGraphState()
+  const lhsState = useGraphState()
+  const rhsState = useGraphState()
 
   const svgRef = useRef<SVGSVGElement | null>(null)
-  // LHS graph state (right-top panel)
-  const [nodesLHS, setNodesLHS] = useState<GraphNode[]>([])
-  const [edgesLHS, setEdgesLHS] = useState<GraphEdge[]>([])
-  const [pendingFromLHS, setPendingFromLHS] = useState<NodeId | null>(null)
-  const [nextIdLHS, setNextIdLHS] = useState<NodeId>(1)
   const svgLHSRef = useRef<SVGSVGElement | null>(null)
+  const svgRHSRef = useRef<SVGSVGElement | null>(null)
 
   // Mapping LHS -> Input
   const [mappingActive, setMappingActive] = useState(false)
   const [mappingQueue, setMappingQueue] = useState<NodeId[]>([])
   const [mappingIndex, setMappingIndex] = useState(0)
   const [mapping, setMapping] = useState<Record<number, number>>({})
-  // RHS graph state (bottom-right panel)
-  const [nodesRHS, setNodesRHS] = useState<GraphNode[]>([])
-  const [edgesRHS, setEdgesRHS] = useState<GraphEdge[]>([])
-  const [pendingFromRHS, setPendingFromRHS] = useState<NodeId | null>(null)
-  const [nextIdRHS, setNextIdRHS] = useState<NodeId>(1)
-  const svgRHSRef = useRef<SVGSVGElement | null>(null)
   // Mapping RHS -> LHS
   const [mappingActiveRHS, setMappingActiveRHS] = useState(false)
   const [mappingQueueRHS, setMappingQueueRHS] = useState<NodeId[]>([])
   const [mappingIndexRHS, setMappingIndexRHS] = useState(0)
   const [mappingRhsToLhs, setMappingRhsToLhs] = useState<Record<number, number>>({})
-  // Calculated graph (bottom-left render)
   const [calcNodes, setCalcNodes] = useState<GraphNode[]>([])
   const [calcEdges, setCalcEdges] = useState<GraphEdge[]>([])
 
   const [showHelp, setShowHelp] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  const onBackgroundClick = useCallback(
-    (e: React.MouseEvent<SVGSVGElement>) => {
-      // Left click adds a node at mouse position
-      if (e.button !== 0) return
-      if (mappingActive) return
-      const svg = svgRef.current
-      if (!svg) return
-      const rect = svg.getBoundingClientRect()
-      const x = e.clientX - rect.left
-      const y = e.clientY - rect.top
+  // Input graph handlers
+  const onBackgroundClick = inputState.createOnBackgroundClick(svgRef, mappingActive)
+  const onBackgroundContextMenu = inputState.createOnBackgroundContextMenu()
 
-      setNodes((prev) => [...prev, { id: nextId, x, y }])
-      setNextId((id) => id + 1)
-    },
-    [nextId, mappingActive]
+  
+  const onInputNodeClick = inputState.createOnNodeClick(
+    mappingActive,
+    mappingQueue,
+    mappingIndex,
+    mapping,
+    setMapping,
+    setMappingIndex,
+    setMappingActive
   )
 
-  const onBackgroundContextMenu = useCallback((e: React.MouseEvent) => {
-    // Prevent default context menu and clear selection if any
-    e.preventDefault()
-    setPendingFrom(null)
-  }, [])
+  // LHS graph handlers
+  const onLHSBackgroundClick = lhsState.createOnBackgroundClick(svgLHSRef, false)
+  const onLHSBackgroundContextMenu = lhsState.createOnBackgroundContextMenu()
 
-  const connectNodes = (a: NodeId, b: NodeId) => {
-  if (a === b) return
-  setEdges((prev) => {
-    const idx = prev.findIndex(
-      (ed) => (ed.source === a && ed.target === b) || (ed.source === b && ed.target === a)
-    )
-    
-    if (idx !== -1) {
-      const next = [...prev]
-      next.splice(idx, 1)
-      return next
-    }
-    return [...prev, { source: a, target: b }]
-  })}
-
-const onNodeContextMenu = 
-  (nodeId: NodeId, e: React.MouseEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    if (mappingActive) return
-    
-    if(pendingFrom===null) setPendingFrom(nodeId)
-    else if(pendingFrom===nodeId) setPendingFrom(null)
-    else 
-    { 
-      connectNodes(pendingFrom,nodeId)
-      setPendingFrom(null)
-    }
-  }
-
-  const onInputNodeClick = useCallback(
-    (nodeId: NodeId, e: React.MouseEvent) => {
-      // Prevent background click; handle mapping selection if active
-      e.stopPropagation()
-      if (!mappingActive) return
-      const lhsId = mappingQueue[mappingIndex]
-      if (lhsId == null) return
-      const used = new Set(Object.values(mapping))
-      if (used.has(nodeId)) return
-      setMapping((prev) => ({ ...prev, [lhsId]: nodeId }))
-      const nextIdx = mappingIndex + 1
-      if (nextIdx >= mappingQueue.length) {
-        setMappingIndex(nextIdx)
-        setMappingActive(false)
-      } else {
-        setMappingIndex(nextIdx)
-      }
-    },
-    [mappingActive, mappingIndex, mappingQueue, mapping]
-  )
-
-  // LHS handlers
-  const onLHSBackgroundClick = useCallback(
-    (e: React.MouseEvent<SVGSVGElement>) => {
-      if (e.button !== 0) return
-      const svg = svgLHSRef.current
-      if (!svg) return
-      const rect = svg.getBoundingClientRect()
-      const x = e.clientX - rect.left
-      const y = e.clientY - rect.top
-      setNodesLHS((prev) => [...prev, { id: nextIdLHS, x, y }])
-      setNextIdLHS((id) => id + 1)
-    },
-    [nextIdLHS]
-  )
-  const onLHSBackgroundContextMenu = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    setPendingFromLHS(null)
-  }, [])
-  const connectNodesLHS = useCallback((a: NodeId, b: NodeId) => {
-    if (a === b) return
-    setEdgesLHS((prev) => {
-      const exists = prev.some(
-        (ed) => (ed.source === a && ed.target === b) || (ed.source === b && ed.target === a)
-      )
-      if (exists) return prev
-      return [...prev, { source: a, target: b }]
-    })
-  }, [])
-  const onLHSNodeContextMenu = useCallback(
-    (nodeId: NodeId, e: React.MouseEvent) => {
-      e.preventDefault()
-      e.stopPropagation()
-      setPendingFromLHS((from) => {
-        if (from == null) return nodeId
-        if (from === nodeId) return null
-        connectNodesLHS(from, nodeId)
-        return null
-      })
-    },
-    [connectNodesLHS]
-  )
 
   const exportNodeLinkJSON = useCallback(() => {
     const data = {
-      
       graph: {},
-      nodes: nodes.map((n) => ({ id: n.id, x: n.x, y: n.y })),
-      links: edges.map((e) => ({ source: e.source, target: e.target })),
+      nodes: inputState.nodes.map((n) => ({ id: n.id, x: n.x, y: n.y })),
+      links: inputState.edges.map((e) => ({ source: e.source, target: e.target })),
     }
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
@@ -168,10 +61,7 @@ const onNodeContextMenu =
     a.download = 'graph_node_link.json'
     a.click()
     URL.revokeObjectURL(url)
-  }, [nodes, edges])
-
-  // Error handling
-  const [error, setError] = useState<string | null>(null)
+  }, [inputState.nodes, inputState.edges])
 
   // Calculate: send graphs + mappings to backend and render returned graph in bottom-left
   const onCalculate = useCallback(async () => {
@@ -180,22 +70,19 @@ const onNodeContextMenu =
       mapping_lhs_to_input: mapping,
       mapping_rhs_to_lhs: mappingRhsToLhs,
       graph_input: {
-        
         graph: {},
-        nodes: nodes.map((n) => ({ id: n.id, x: n.x, y: n.y })),
-        links: edges.map((e) => ({ source: e.source, target: e.target })),
+        nodes: inputState.nodes.map((n) => ({ id: n.id, x: n.x, y: n.y })),
+        links: inputState.edges.map((e) => ({ source: e.source, target: e.target })),
       },
       graph_lhs: {
-        
         graph: {},
-        nodes: nodesLHS.map((n) => ({ id: n.id, x: n.x, y: n.y })),
-        links: edgesLHS.map((e) => ({ source: e.source, target: e.target })),
+        nodes: lhsState.nodes.map((n) => ({ id: n.id, x: n.x, y: n.y })),
+        links: lhsState.edges.map((e) => ({ source: e.source, target: e.target })),
       },
       graph_rhs: {
-        
         graph: {},
-        nodes: nodesRHS.map((n) => ({ id: n.id, x: n.x, y: n.y })),
-        links: edgesRHS.map((e) => ({ source: e.source, target: e.target })),
+        nodes: rhsState.nodes.map((n) => ({ id: n.id, x: n.x, y: n.y })),
+        links: rhsState.edges.map((e) => ({ source: e.source, target: e.target })),
       },
     }
     try {
@@ -224,42 +111,31 @@ const onNodeContextMenu =
       console.error('Calculate failed', err)
       setError(err.message || 'Unknown error occurred')
     }
-  }, [mapping, mappingRhsToLhs, nodes, edges, nodesLHS, edgesLHS, nodesRHS, edgesRHS])
+  }, [mapping, mappingRhsToLhs, inputState.nodes, inputState.edges, lhsState.nodes, lhsState.edges, rhsState.nodes, rhsState.edges])
 
-  const clearGraph = useCallback(() => {
-    setNodes([])
-    setEdges([])
-    setPendingFrom(null)
-    setNextId(1)
-  }, [])
 
-  const clearLHS = useCallback(() => {
-    setNodesLHS([])
-    setEdgesLHS([])
-    setPendingFromLHS(null)
-    setNextIdLHS(1)
-  }, [])
 
+ 
   const startMapping = useCallback(() => {
-    if (nodesLHS.length === 0 || nodes.length === 0) return
+    if (lhsState.nodes.length === 0 || inputState.nodes.length === 0) return
     // ensure RHS mapping is not active at the same time
     setMappingActiveRHS(false)
     setMappingQueueRHS([])
     setMappingIndexRHS(0)
     setMapping({})
-    const queue = [...nodesLHS].sort((a, b) => a.id - b.id).map((n) => n.id)
+    const queue = [...lhsState.nodes].sort((a, b) => a.id - b.id).map((n) => n.id)
     setMappingQueue(queue)
     setMappingIndex(0)
     setMappingActive(true)
-  }, [nodesLHS, nodes])
+  }, [lhsState.nodes, inputState.nodes])
 
-  const pendingNode = useMemo(() => pendingFrom, [pendingFrom])
-  const pendingNodeLHS = useMemo(() => pendingFromLHS, [pendingFromLHS])
+  const pendingNode = useMemo(() => inputState.pendingFrom, [inputState.pendingFrom])
+  const pendingNodeLHS = useMemo(() => lhsState.pendingFrom, [lhsState.pendingFrom])
   const currentLHSId = mappingActive ? mappingQueue[mappingIndex] : undefined
   const usedInputIds = useMemo(() => new Set(Object.values(mapping)), [mapping])
   const usedLhsIdsFromRhs = useMemo(() => new Set(Object.values(mappingRhsToLhs)), [mappingRhsToLhs])
   const currentRHSId = mappingActiveRHS ? mappingQueueRHS[mappingIndexRHS] : undefined
-  const pendingNodeRHS = useMemo(() => pendingFromRHS, [pendingFromRHS])
+  const pendingNodeRHS = useMemo(() => rhsState.pendingFrom, [rhsState.pendingFrom])
 
   // Move Result as Input: Replace input graph with result and clear everything else
   const moveResultAsInput = useCallback(() => {
@@ -304,23 +180,15 @@ const onNodeContextMenu =
     }))
 
     // 2. Set Input Graph from Result (Scaled)
-    setNodes(newNodes)
-    setEdges(calcEdges)
-    const maxId = newNodes.reduce((max, n) => Math.max(max, n.id), 0)
-    setNextId(maxId + 1)
-    setPendingFrom(null)
+    inputState.setNodes(newNodes)
+    inputState.setEdges(calcEdges)
+    inputState.setPending(null)
 
     // 3. Clear LHS
-    setNodesLHS([])
-    setEdgesLHS([])
-    setPendingFromLHS(null)
-    setNextIdLHS(1)
+    lhsState.reset()
 
     // 4. Clear RHS
-    setNodesRHS([])
-    setEdgesRHS([])
-    setPendingFromRHS(null)
-    setNextIdRHS(1)
+    rhsState.reset()
 
     // 5. Clear Mappings
     setMappingActive(false)
@@ -338,7 +206,7 @@ const onNodeContextMenu =
     setCalcEdges([])
     // Clear error
     setError(null)
-  }, [calcNodes, calcEdges])
+  }, [calcNodes, calcEdges, inputState, lhsState, rhsState])
 
   return (
     <div className="graph-editor-root" onContextMenu={(e) => e.preventDefault()}>
@@ -391,7 +259,7 @@ const onNodeContextMenu =
           <div className="panel-header">
             <span className="panel-title">Input Graph</span>
             <div style={{ display: 'flex', gap: '0.5rem', marginLeft: 'auto' }}>
-              <button className="btn" onClick={clearGraph}>Clear</button>
+              <button className="btn" onClick={ inputState.reset}>Clear</button>
               <button className="btn" onClick={exportNodeLinkJSON}>Export JSON</button>
             </div>
           </div>
@@ -403,9 +271,9 @@ const onNodeContextMenu =
               onContextMenu={onBackgroundContextMenu}
             >
               <g>
-                {edges.map((e, idx) => {
-                  const a = nodes.find((n) => n.id === e.source)
-                  const b = nodes.find((n) => n.id === e.target)
+                {inputState.edges.map((e, idx) => {
+                  const a = inputState.nodes.find((n) => n.id === e.source)
+                  const b = inputState.nodes.find((n) => n.id === e.target)
                   if (!a || !b) return null
                   return (
                     <line
@@ -421,11 +289,11 @@ const onNodeContextMenu =
                 })}
               </g>
               <g>
-                {nodes.map((n) => (
+                {inputState.nodes.map((n) => (
                   <g
                     key={n.id}
                     transform={`translate(${n.x}, ${n.y})`}
-                    onContextMenu={(e) => onNodeContextMenu(n.id, e)}
+                    onContextMenu={(e) => inputState.createOnNodeContextMenu(n.id, e)}
                     onClick={(e) => onInputNodeClick(n.id, e)}
                     style={{ cursor: 'pointer' }}
                   >
@@ -459,11 +327,11 @@ const onNodeContextMenu =
               <button
                 className="btn btn-primary"
                 onClick={startMapping}
-                disabled={nodesLHS.length === 0 || nodes.length === 0 || mappingActive}
+                disabled={lhsState.nodes.length === 0 || inputState.nodes.length === 0 || mappingActive}
               >
                 Map LHS→Input
               </button>
-              <button className="btn" onClick={clearLHS} disabled={mappingActive}>Clear</button>
+              <button className="btn" onClick={ lhsState.reset} disabled={mappingActive}>Clear</button>
             </div>
           </div>
           <div style={{ marginBottom: '0.5rem', height: '1.5rem' }}>
@@ -479,9 +347,9 @@ const onNodeContextMenu =
               onContextMenu={onLHSBackgroundContextMenu}
             >
               <g>
-                {edgesLHS.map((e, idx) => {
-                  const a = nodesLHS.find((n) => n.id === e.source)
-                  const b = nodesLHS.find((n) => n.id === e.target)
+                {lhsState.edges.map((e, idx) => {
+                  const a = lhsState.nodes.find((n) => n.id === e.source)
+                  const b = lhsState.nodes.find((n) => n.id === e.target)
                   if (!a || !b) return null
                   return (
                     <line
@@ -497,7 +365,7 @@ const onNodeContextMenu =
                 })}
               </g>
               <g>
-                {nodesLHS.map((n) => {
+                {lhsState.nodes.map((n) => {
                   const isCurrent = mappingActive && currentLHSId === n.id
                   const isPending = !mappingActive && pendingNodeLHS === n.id
                   const isUsedByRhs = usedLhsIdsFromRhs.has(n.id)
@@ -505,7 +373,7 @@ const onNodeContextMenu =
                     <g
                       key={`lhs-${n.id}`}
                       transform={`translate(${n.x}, ${n.y})`}
-                      onContextMenu={(e) => onLHSNodeContextMenu(n.id, e)}
+                      onContextMenu={(e) => lhsState.createOnNodeContextMenu(n.id, e)}
                       onClick={(e) => {
                         e.stopPropagation()
                         // If RHS mapping is active, map current RHS → this LHS node
@@ -648,28 +516,25 @@ const onNodeContextMenu =
               <button
                 className="btn btn-primary"
                 onClick={() => {
-                  if (nodesRHS.length === 0 || nodesLHS.length === 0) return
+                  if (rhsState.nodes.length === 0 || lhsState.nodes.length === 0) return
                   // ensure LHS→Input mapping is not active
                   setMappingActive(false)
                   setMappingQueue([])
                   setMappingIndex(0)
-                  const queue = [...nodesRHS].sort((a, b) => a.id - b.id).map((n) => n.id)
+                  const queue = [...rhsState.nodes].sort((a, b) => a.id - b.id).map((n) => n.id)
                   setMappingRhsToLhs({})
                   setMappingQueueRHS(queue)
                   setMappingIndexRHS(0)
                   setMappingActiveRHS(true)
                 }}
-                disabled={nodesRHS.length === 0 || nodesLHS.length === 0 || mappingActiveRHS}
+                disabled={rhsState.nodes.length === 0 || lhsState.nodes.length === 0 || mappingActiveRHS}
               >
                 Map RHS→LHS
               </button>
               <button
                 className="btn"
                 onClick={() => {
-                  setNodesRHS([])
-                  setEdgesRHS([])
-                  setPendingFromRHS(null)
-                  setNextIdRHS(1)
+                  rhsState.reset()
                 }}
                 disabled={mappingActiveRHS}
               >
@@ -696,7 +561,7 @@ const onNodeContextMenu =
               </span>
             ) : Object.keys(mappingRhsToLhs).length > 0 ? (
               <span style={{ color: 'var(--success-color)' }}>
-                Mapped {Object.keys(mappingRhsToLhs).length}/{nodesRHS.length} nodes
+                Mapped {Object.keys(mappingRhsToLhs).length}/{rhsState.nodes.length} nodes
                 <button
                   className="btn"
                   style={{ marginLeft: '0.5rem', padding: '0.1rem 0.5rem', fontSize: '0.75rem' }}
@@ -720,18 +585,17 @@ const onNodeContextMenu =
                 const rect = svg.getBoundingClientRect()
                 const x = e.clientX - rect.left
                 const y = e.clientY - rect.top
-                setNodesRHS((prev) => [...prev, { id: nextIdRHS, x, y }])
-                setNextIdRHS((id) => id + 1)
+                rhsState.addNode(x, y)
               }}
               onContextMenu={(e) => {
                 e.preventDefault()
-                setPendingFromRHS(null)
+                rhsState.setPending(null)
               }}
             >
               <g>
-                {edgesRHS.map((e, idx) => {
-                  const a = nodesRHS.find((n) => n.id === e.source)
-                  const b = nodesRHS.find((n) => n.id === e.target)
+                {rhsState.edges.map((e, idx) => {
+                  const a = rhsState.nodes.find((n) => n.id === e.source)
+                  const b = rhsState.nodes.find((n) => n.id === e.target)
                   if (!a || !b) return null
                   return (
                     <line
@@ -747,26 +611,11 @@ const onNodeContextMenu =
                 })}
               </g>
               <g>
-                {nodesRHS.map((n) => (
+                {rhsState.nodes.map((n) => (
                   <g
                     key={`rhs-${n.id}`}
                     transform={`translate(${n.x}, ${n.y})`}
-                    onContextMenu={(e) => {
-                      e.preventDefault()
-                      e.stopPropagation()
-                      setPendingFromRHS((from) => {
-                        if (from == null) return n.id
-                        if (from === n.id) return null
-                        setEdgesRHS((prev) => {
-                          const exists = prev.some(
-                            (ed) => (ed.source === from && ed.target === n.id) || (ed.source === n.id && ed.target === from)
-                          )
-                          if (exists) return prev
-                          return [...prev, { source: from, target: n.id }]
-                        })
-                        return null
-                      })
-                    }}
+                    onContextMenu={(e) => rhsState.createOnNodeContextMenu(n.id, e)}
                     onClick={(e) => e.stopPropagation()}
                     style={{ cursor: 'pointer' }}
                   >

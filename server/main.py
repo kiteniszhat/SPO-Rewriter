@@ -28,6 +28,8 @@ class NodeLinkGraph(BaseModel):
     links: List[Link] = Field(default_factory=list)
     def to_networkx(self) -> nx.Graph:
         data = {
+            "directed": False,
+            "multigraph": False,
             "graph": self.graph,
             "nodes": [n.model_dump() for n in self.nodes],
             "links": [e.model_dump() for e in self.links],
@@ -325,7 +327,7 @@ def calculate(req: CalculateRequest) -> NodeLinkGraph:
 
     # --- Convert back to node-link -------------------------------------------
 
-    data = json_graph.node_link_graph(G_in)
+    data = json_graph.node_link_data(G_in)
     nodes = [Node(id=n["id"], x=n.get("x"), y=n.get("y")) for n in data["nodes"]]
     links = [Link(source=l["source"], target=l["target"]) for l in data["links"]]
 
