@@ -23,3 +23,4 @@ dist-ssr
 *.sln
 *.sw?
 server/.venv
+server/__pycache__/main.cpython-313.pyc

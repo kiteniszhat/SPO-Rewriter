@@ -1,57 +1,11 @@
-from typing import Dict, List, Optional, Union
-import json
 import logging
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-import networkx as nx
-from networkx.readwrite import json_graph
+from typing import Dict, List, Optional, Union
+from models import NodeId,CalculateRequest,NodeLinkGraph,Link,Node
+import json
+from fastapi import HTTPException
 from collections import deque
-from fastapi import FastAPI, HTTPException
-NodeId = Union[int, str]
-
-
-class Node(BaseModel):
-    id: NodeId
-    x: float|None = None
-    y: float|None = None
-
-
-class Link(BaseModel):
-    source: NodeId
-    target: NodeId
-
-
-class NodeLinkGraph(BaseModel):
-    graph: Dict = Field(default_factory=dict) 
-    nodes: List[Node] = Field(default_factory=list)
-    links: List[Link] = Field(default_factory=list)
-    def to_networkx(self) -> nx.Graph:
-        data = {
-            "directed": False,
-            "multigraph": False,
-            "graph": self.graph,
-            "nodes": [n.model_dump() for n in self.nodes],
-            "links": [e.model_dump() for e in self.links],
-        }
-        return json_graph.node_link_graph(data)
-
-class CalculateRequest(BaseModel):
-    mapping_lhs_to_input: Dict[NodeId, NodeId] = Field(default_factory=dict)
-    mapping_rhs_to_lhs: Dict[NodeId, NodeId] = Field(default_factory=dict)
-    graph_input: NodeLinkGraph
-    graph_lhs: NodeLinkGraph
-    graph_rhs: NodeLinkGraph
-    
-
-app = FastAPI(title="Graph Calculate API")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
+from networkx.readwrite import json_graph
+import networkx as nx
 # Configure logging
 logger = logging.getLogger("spo-rewriter")
 if not logger.handlers:
@@ -77,8 +31,45 @@ def _norm_ids(mapping: Dict[NodeId,NodeId])->Dict:
                 return n
         return n
     return {_to_int_helper(n1): _to_int_helper(n2) for n1,n2 in mapping.items()}
-@app.post("/calculate")
+def _check_morphism(G_in:nx.Graph,G_lhs:nx.Graph,lhs_to_input:nx.Graph) ->None:
+    for lhs_id in list(G_lhs.nodes):
+
+        input_id = lhs_to_input.get(lhs_id)
+        if input_id is None:
+            raise HTTPException(status_code=400, detail="error: lhs isn't fully mapped to input")
+        lhs_nbrs = G_lhs.neighbors(lhs_id)
+        lhs_nbrs_list = list(G_lhs.neighbors(lhs_id))
+        inp_nbrs_set = set(G_in.neighbors(input_id)) 
+        inp_lhs_nbrs_mapped = {lhs_to_input.get(l) for l in lhs_nbrs_list if lhs_to_input.get(l) is not None}
+        print(f"LHS {lhs_id} mapped to input {input_id}")
+        print(f"Mapped LHS neighbors -> input ids: {sorted(inp_lhs_nbrs_mapped)}")
+        print(f"Input neighbors of {input_id}: {sorted(inp_nbrs_set)}")
+        #neighbors matching
+        if not inp_lhs_nbrs_mapped.issubset(inp_nbrs_set):
+            raise HTTPException(status_code=400, detail="error: no morphism")
+        # more edges than in input graph
+        #to 
+        for l in lhs_nbrs:
+            print(l)
+            i = lhs_to_input.get(l)
+            print(f"mapped to {i}, {input_id}")
+            if G_in.has_edge(i,input_id) or  G_in.has_edge(input_id,i):
+                print("true")
+                continue
+            else:
+                raise HTTPException(status_code=400, detail="error: no morphism")
+        #to chyba nie jest potrzebne ale coz szkodzi obiecac, załatwia to już neighbors matching
+        #less edges than in input graph
+        for l in list(G_lhs.nodes):
+            if l == lhs_id:
+                pass
+            i = lhs_to_input.get(l)
+            if G_in.has_edge(input_id,i):
+                if not G_lhs.has_edge(lhs_id,l):
+                    raise HTTPException(status_code=400, detail="error: no morphism")
+    return True
 def calculate(req: CalculateRequest) -> NodeLinkGraph:
+    # Log request summary
     try:
         logger.info(
             "Request: input nodes=%d edges=%d | lhs nodes=%d edges=%d | rhs nodes=%d edges=%d",
@@ -99,13 +90,16 @@ def calculate(req: CalculateRequest) -> NodeLinkGraph:
     G_lhs = req.graph_lhs.to_networkx()
     G_rhs = req.graph_rhs.to_networkx()
 
+
     lhs_to_input = _norm_ids(req.mapping_lhs_to_input)
     rhs_to_lhs   = _norm_ids(req.mapping_rhs_to_lhs)
+    logger.info("Normalized mappings sizes: lhs->input=%d rhs->lhs=%d", len(lhs_to_input), len(rhs_to_lhs))
+
 
     # Reverse map: LHS → list of RHS nodes that map to it
-    lhs_from_rhs = {}
+    lhs_to_rhs = {}
     for rhs_id, lhs_id in rhs_to_lhs.items():
-        lhs_from_rhs.setdefault(lhs_id, []).append(rhs_id)
+        lhs_to_rhs.setdefault(lhs_id, []).append(rhs_id)
 
     # Create IDs for new nodes (for RHS neighbors that don't map to LHS)
     try:
@@ -123,7 +117,7 @@ def calculate(req: CalculateRequest) -> NodeLinkGraph:
     # --- Helper functions -----------------------------------------------------
 
     def ensure_edge(u, v):
-        """Add edge if missing """
+        """Add edge if missing (undirected)."""
         if not G_in.has_edge(u, v) and not G_in.has_edge(v, u):
             G_in.add_edge(u, v)
             return True
@@ -134,26 +128,21 @@ def calculate(req: CalculateRequest) -> NodeLinkGraph:
            that does not map to LHS."""
         nonlocal next_new_id
         nonlocal created_nodes_count
-        # if rhs_id in rhs_new_to_input:
-        #     print(f"returning with ")
-        #     return rhs_new_to_input[rhs_id]
+        if rhs_id in rhs_new_to_input:
+            return rhs_new_to_input[rhs_id]
         in_pos      = G_in.nodes.get(input_src, {})
         new_x = float(in_pos.get("x", 0.0)) 
         new_y = float(in_pos.get("y", 0.0)) 
         new_id = next_new_id
         next_new_id += 1
-        print(f"created new_id = {new_id}")
         created_nodes_count += 1
         if not rhs_src and not input_src:
             G_in.add_node(new_id, x=new_x, y=new_y)
             return new_id
         rhs_pos     = G_rhs.nodes.get(rhs_src, {})
         rhs_nbr_pos = G_rhs.nodes.get(rhs_id,  {})
-        
-
         dx = float(rhs_nbr_pos.get("x", 0.0)) - float(rhs_pos.get("x", 0.0))
         dy = float(rhs_nbr_pos.get("y", 0.0)) - float(rhs_pos.get("y", 0.0))
-
         new_x += new_x + dx
         new_y += new_y + dy
         G_in.add_node(new_id, x=new_x, y=new_y)
@@ -165,48 +154,7 @@ def calculate(req: CalculateRequest) -> NodeLinkGraph:
         return new_id
 
     # --- Main logic ----------------------------------------------------------
-     # --- Morphism ----------------------------------------------------------
-    for lhs_id in list(G_lhs.nodes):
-
-        input_id = lhs_to_input.get(lhs_id)
-        if input_id is None:
-            raise HTTPException(status_code=400, detail="error: lhs isn't fully mapped to input")
-        lhs_nbrs = G_lhs.neighbors(lhs_id)
-        lhs_nbrs_list = list(G_lhs.neighbors(lhs_id))
-        inp_nbrs_set = set(G_in.neighbors(input_id)) 
-        inp_lhs_nbrs_mapped = {lhs_to_input.get(l) for l in lhs_nbrs_list if lhs_to_input.get(l) is not None}
-        print(f"LHS {lhs_id} mapped to input {input_id}")
-        print(f"Mapped LHS neighbors -> input ids: {sorted(inp_lhs_nbrs_mapped)}")
-        print(f"Input neighbors of {input_id}: {sorted(inp_nbrs_set)}")
-        #neighbors matching
-        if not inp_lhs_nbrs_mapped.issubset(inp_nbrs_set):
-            raise HTTPException(status_code=400, detail="error: no morphism")
-        
-
-        # more edges than in input graph
-        #to 
-        for l in lhs_nbrs:
-            print(l)
-            i = lhs_to_input.get(l)
-            print(f"mapped to {i}, {input_id}")
-            if G_in.has_edge(i,input_id) or  G_in.has_edge(input_id,i):
-                print("true")
-                continue
-            else:
-                raise HTTPException(status_code=400, detail="error: no morphism")
-        #to chyba nie jest potrzebne, załatwia to już neighbors matching
-
-
-        #less edges than in input graph
-        for l in list(G_lhs.nodes):
-            if l == lhs_id:
-                pass
-            i = lhs_to_input.get(l)
-            if G_in.has_edge(input_id,i):
-                if not G_lhs.has_edge(lhs_id,l):
-                    raise HTTPException(status_code=400, detail="error: no morphism")
-      # --- Morphism - end ---------------------------------------------------------     
-
+    _check_morphism(G_in,G_lhs,lhs_to_input)
 
     for lhs_id in list(G_lhs.nodes):
         input_id = lhs_to_input.get(lhs_id)
@@ -214,7 +162,7 @@ def calculate(req: CalculateRequest) -> NodeLinkGraph:
         if input_id is None:
             continue  # unmapped LHS is ignored
 
-        rhs_list = lhs_from_rhs.get(lhs_id, [])
+        rhs_list = lhs_to_rhs.get(lhs_id, [])
         if not rhs_list:
             if input_id in G_in:
                 G_in.remove_node(input_id)   # delete non-preserved node
@@ -225,7 +173,9 @@ def calculate(req: CalculateRequest) -> NodeLinkGraph:
         # Node is preserved → expand frontier over RHS graph using BFS
         for rhs_start in rhs_list:
 
-           
+            if rhs_start not in G_rhs:
+                continue
+
             # BFS queue holds (rhs_current, input_current_anchor)
             queue = deque()
             queue.append((rhs_start, input_id))
@@ -238,10 +188,18 @@ def calculate(req: CalculateRequest) -> NodeLinkGraph:
                 visited_rhs.add(rhs_cur)
 
                 # neighbors in RHS for expansion
-            
+              
                 neighbors_iter = G_rhs.neighbors(rhs_cur)
                 # Compare neighbor counts using degree
-               
+                try:
+                    
+                    rhs_deg = G_rhs.degree(rhs_cur)
+                    in_deg = G_in.degree(input_cur)
+                    # Optional: keep for diagnostics if needed
+                    # logger.debug("Degree compare rhs=%s(%d) input=%s(%d)", rhs_cur, rhs_deg, input_cur, in_deg)
+                except Exception:
+                    rhs_deg = None
+                    in_deg = None
                 
                 for rhs_nbr in neighbors_iter:
                     lhs_nbr = rhs_to_lhs.get(rhs_nbr)
@@ -268,11 +226,10 @@ def calculate(req: CalculateRequest) -> NodeLinkGraph:
                     # expand frontier from mapped neighbor
                     if rhs_nbr not in visited_rhs:
                         queue.append((rhs_nbr, input_nbr))
-    for rhs_node in list(G_rhs.nodes):
-        logger.info(f"iterating with {rhs_node}")
-        if rhs_node not in visited_rhs and not rhs_node in lhs_from_rhs:
-            input_nbr = create_rhs_only_node( None, None,rhs_node)
-            logger.info(f"Added node only rhs {rhs_node}")
+            for rhs_node in list(G_rhs.nodes):
+                if rhs_node not in visited_rhs and not rhs_node in lhs_to_rhs:
+                    input_nbr = create_rhs_only_node( None, None,rhs_node)
+                    logger.info("Added node only rhs")
 
     # --- Remove edges that were in LHS but disappeared in RHS ---
     # For each LHS edge (lu, lv), if mapped input endpoints exist but no
@@ -283,8 +240,8 @@ def calculate(req: CalculateRequest) -> NodeLinkGraph:
         if in_u is None or in_v is None:
             continue
 
-        rhs_us = lhs_from_rhs.get(lu, [])
-        rhs_vs = lhs_from_rhs.get(lv, [])
+        rhs_us = lhs_to_rhs.get(lu, [])
+        rhs_vs = lhs_to_rhs.get(lv, [])
         # Determine if any RHS pair has an edge
         rhs_has_edge = False
         
@@ -295,12 +252,11 @@ def calculate(req: CalculateRequest) -> NodeLinkGraph:
                     break
             if rhs_has_edge:
                 break
-        
+      
 
         # If RHS lacks the edge, remove corresponding input edge if present
         if not rhs_has_edge:
             try:
-                
                 if G_in.has_edge(in_u, in_v):
                     G_in.remove_edge(in_u, in_v)
                     removed_edges_count_edges += 1
@@ -325,7 +281,7 @@ def calculate(req: CalculateRequest) -> NodeLinkGraph:
     )
 
     return NodeLinkGraph(
-        
+      
         graph=data.get("graph", {}),
         nodes=nodes,
         links=links,
