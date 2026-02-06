@@ -41,20 +41,20 @@ def _check_morphism(G_in:nx.Graph,G_lhs:nx.Graph,lhs_to_input:nx.Graph) ->None:
         lhs_nbrs_list = list(G_lhs.neighbors(lhs_id))
         inp_nbrs_set = set(G_in.neighbors(input_id)) 
         inp_lhs_nbrs_mapped = {lhs_to_input.get(l) for l in lhs_nbrs_list if lhs_to_input.get(l) is not None}
-        print(f"LHS {lhs_id} mapped to input {input_id}")
-        print(f"Mapped LHS neighbors -> input ids: {sorted(inp_lhs_nbrs_mapped)}")
-        print(f"Input neighbors of {input_id}: {sorted(inp_nbrs_set)}")
+        logger.info(f"LHS {lhs_id} mapped to input {input_id}")
+        logger.info(f"Mapped LHS neighbors -> input ids: {sorted(inp_lhs_nbrs_mapped)}")
+        logger.info(f"Input neighbors of {input_id}: {sorted(inp_nbrs_set)}")
         #neighbors matching
         if not inp_lhs_nbrs_mapped.issubset(inp_nbrs_set):
             raise HTTPException(status_code=400, detail="error: no morphism")
         # more edges than in input graph
         #to 
         for l in lhs_nbrs:
-            print(l)
+            logger.info(l)
             i = lhs_to_input.get(l)
-            print(f"mapped to {i}, {input_id}")
+            logger.info(f"mapped to {i}, {input_id}")
             if G_in.has_edge(i,input_id) or  G_in.has_edge(input_id,i):
-                print("true")
+                logger.info("true")
                 continue
             else:
                 raise HTTPException(status_code=400, detail="error: no morphism")
@@ -160,7 +160,7 @@ def calculate(req: CalculateRequest) -> NodeLinkGraph:
         input_id = lhs_to_input.get(lhs_id)
        
         if input_id is None:
-            continue  # unmapped LHS is ignored
+            continue  # unmapped LHS is ignored, this is handled with errors
 
         rhs_list = lhs_to_rhs.get(lhs_id, [])
         if not rhs_list:
@@ -244,16 +244,12 @@ def calculate(req: CalculateRequest) -> NodeLinkGraph:
         rhs_vs = lhs_to_rhs.get(lv, [])
         # Determine if any RHS pair has an edge
         rhs_has_edge = False
-        
+
         for ru in rhs_us:
             for rv in rhs_vs:
                 if G_rhs.has_edge(ru, rv):
                     rhs_has_edge = True
-                    break
-            if rhs_has_edge:
-                break
       
-
         # If RHS lacks the edge, remove corresponding input edge if present
         if not rhs_has_edge:
             try:
@@ -261,13 +257,9 @@ def calculate(req: CalculateRequest) -> NodeLinkGraph:
                     G_in.remove_edge(in_u, in_v)
                     removed_edges_count_edges += 1
                     logger.info("Removed input edge %s -- %s (LHS edge disappeared in RHS)", in_u, in_v)
-                elif G_in.has_edge(in_v, in_u):
-                    G_in.remove_edge(in_v, in_u)
-                    removed_edges_count_edges += 1
-                    logger.info("Removed input edge %s -- %s (LHS edge disappeared in RHS)", in_v, in_u)
+                
             except Exception as exc:
                 logger.warning("Failed removing mapped input edge %s-%s: %s", in_u, in_v, exc)
-
 
     # --- Convert back to node-link -------------------------------------------
 
@@ -281,7 +273,6 @@ def calculate(req: CalculateRequest) -> NodeLinkGraph:
     )
 
     return NodeLinkGraph(
-      
         graph=data.get("graph", {}),
         nodes=nodes,
         links=links,
