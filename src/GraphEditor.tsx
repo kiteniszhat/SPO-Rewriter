@@ -24,6 +24,8 @@ export default function GraphEditor() {
   const [mappingRhsToLhs, setMappingRhsToLhs] = useState<Record<number, number>>({})
   const [calcNodes, setCalcNodes] = useState<GraphNode[]>([])
   const [calcEdges, setCalcEdges] = useState<GraphEdge[]>([])
+  const svgResultRef = useRef<SVGSVGElement | null>(null)
+  const [dragCalcNodeId, setDragCalcNodeId] = useState<NodeId | null>(null)
 
   const [showHelp, setShowHelp] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -105,7 +107,33 @@ export default function GraphEditor() {
       const data = await res.json()
       const rNodes = Array.isArray(data.nodes) ? data.nodes : []
       const rLinks = Array.isArray(data.links) ? data.links : []
-      setCalcNodes(rNodes.map((n: any) => ({ id: Number(n.id ?? n), x: n.x ?? 0, y: n.y ?? 0 })))
+      // Transform result node coordinates to fit the result panel
+      const rawNodes = rNodes.map((n: any) => ({ id: Number(n.id ?? n), x: n.x ?? 0, y: n.y ?? 0 }))
+      if (rawNodes.length > 0) {
+        const svgEl = svgResultRef.current
+        let svgW = 600, svgH = 400
+        if (svgEl) {
+          const rect = svgEl.getBoundingClientRect()
+          svgW = rect.width || svgW
+          svgH = rect.height || svgH
+        }
+        const pad = 30
+        const xs = rawNodes.map((n: GraphNode) => n.x)
+        const ys = rawNodes.map((n: GraphNode) => n.y)
+        const minX = Math.min(...xs), maxX = Math.max(...xs)
+        const minY = Math.min(...ys), maxY = Math.max(...ys)
+        let cW = maxX - minX, cH = maxY - minY
+        if (cW === 0) cW = 1
+        if (cH === 0) cH = 1
+        const sc = Math.min((svgW - pad * 2) / cW, (svgH - pad * 2) / cH)
+        setCalcNodes(rawNodes.map((n: GraphNode) => ({
+          id: n.id,
+          x: pad + (n.x - minX) * sc,
+          y: pad + (n.y - minY) * sc,
+        })))
+      } else {
+        setCalcNodes([])
+      }
       setCalcEdges(rLinks.map((l: any) => ({ source: Number(l.source), target: Number(l.target) })))
     } catch (err: any) {
       console.error('Calculate failed', err)
@@ -113,9 +141,29 @@ export default function GraphEditor() {
     }
   }, [mapping, mappingRhsToLhs, inputState.nodes, inputState.edges, lhsState.nodes, lhsState.edges, rhsState.nodes, rhsState.edges])
 
+  // Result graph drag and drop
+  const onResultNodeMouseDown = useCallback((nodeId: NodeId, e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setDragCalcNodeId(nodeId)
+  }, [])
 
+  const onResultMouseMove = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
+    if (dragCalcNodeId === null) return
+    const svg = svgResultRef.current
+    if (!svg) return
+    const rect = svg.getBoundingClientRect()
+    const x = e.clientX - rect.left
+    const y = e.clientY - rect.top
+    setCalcNodes(prev => prev.map(n =>
+      n.id === dragCalcNodeId ? { ...n, x, y } : n
+    ))
+  }, [dragCalcNodeId])
 
- 
+  const onResultMouseUp = useCallback(() => {
+    setDragCalcNodeId(null)
+  }, [])
+
   const startMapping = useCallback(() => {
     if (lhsState.nodes.length === 0 || inputState.nodes.length === 0) return
     // ensure RHS mapping is not active at the same time
@@ -449,62 +497,47 @@ export default function GraphEditor() {
             </div>
           )}
           <div className="graph-container">
-            {(() => {
-              const padding = 24
-              const width = 600 // virtual canvas width for viewBox
-              const height = 260 // container height
-              const xs = calcNodes.map((n) => n.x)
-              const ys = calcNodes.map((n) => n.y)
-              const minX = xs.length ? Math.min(...xs) : 0
-              const maxX = xs.length ? Math.max(...xs) : 1
-              const minY = ys.length ? Math.min(...ys) : 0
-              const maxY = ys.length ? Math.max(...ys) : 1
-              const contentW = Math.max(1, maxX - minX)
-              const contentH = Math.max(1, maxY - minY)
-              const scaleX = (width - padding * 2) / contentW
-              const scaleY = (height - padding * 2) / contentH
-              const scale = Math.max(0.1, Math.min(scaleX, scaleY))
-              const translateX = padding - minX * scale
-              const translateY = padding - minY * scale
-              return (
-                <svg
-                  className="graph-canvas"
-                  viewBox={`0 0 ${width} ${height}`}
-                  preserveAspectRatio="xMidYMid meet"
-                >
-                  <g transform={`translate(${translateX}, ${translateY}) scale(${scale})`}>
-                    <g>
-                      {calcEdges.map((e, idx) => {
-                        const a = calcNodes.find((n) => n.id === e.source)
-                        const b = calcNodes.find((n) => n.id === e.target)
-                        if (!a || !b) return null
-                        return (
-                          <line
-                            key={`edge-calc-${idx}`}
-                            x1={a.x}
-                            y1={a.y}
-                            x2={b.x}
-                            y2={b.y}
-                            stroke="var(--text-secondary)"
-                            strokeWidth={2 / scale}
-                          />
-                        )
-                      })}
-                    </g>
-                    <g>
-                      {calcNodes.map((n) => (
-                        <g key={`calc-${n.id}`} transform={`translate(${n.x}, ${n.y})`}>
-                          <circle r={12 / scale} fill="var(--node-fill)" stroke="var(--node-stroke)" strokeWidth={2 / scale} />
-                          <text y={4 / scale} textAnchor="middle" fontSize={11 / scale} fill="#fff" style={{ userSelect: 'none', pointerEvents: 'none', fontWeight: 600 }}>
-                            {n.id}
-                          </text>
-                        </g>
-                      ))}
-                    </g>
+            <svg
+              ref={svgResultRef}
+              className="graph-canvas"
+              onMouseMove={onResultMouseMove}
+              onMouseUp={onResultMouseUp}
+              onMouseLeave={onResultMouseUp}
+            >
+              <g>
+                {calcEdges.map((e, idx) => {
+                  const a = calcNodes.find((n) => n.id === e.source)
+                  const b = calcNodes.find((n) => n.id === e.target)
+                  if (!a || !b) return null
+                  return (
+                    <line
+                      key={`edge-calc-${idx}`}
+                      x1={a.x}
+                      y1={a.y}
+                      x2={b.x}
+                      y2={b.y}
+                      stroke="var(--text-secondary)"
+                      strokeWidth={2}
+                    />
+                  )
+                })}
+              </g>
+              <g>
+                {calcNodes.map((n) => (
+                  <g
+                    key={`calc-${n.id}`}
+                    transform={`translate(${n.x}, ${n.y})`}
+                    onMouseDown={(e) => onResultNodeMouseDown(n.id, e)}
+                    style={{ cursor: dragCalcNodeId === n.id ? 'grabbing' : 'grab' }}
+                  >
+                    <circle r={14} fill="var(--node-fill)" stroke="var(--node-stroke)" strokeWidth={2} />
+                    <text y={4} textAnchor="middle" fontSize={12} fill="#fff" style={{ userSelect: 'none', pointerEvents: 'none', fontWeight: 600 }}>
+                      {n.id}
+                    </text>
                   </g>
-                </svg>
-              )
-            })()}
+                ))}
+              </g>
+            </svg>
           </div>
         </div>
 
