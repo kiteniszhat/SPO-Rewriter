@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import type {NodeId,GraphNode,GraphEdge} from "./Types"
 import { useGraphState } from './hooks/useGraphState'
 
-
+const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 export default function GraphEditor() {
   const inputState = useGraphState()
   const lhsState = useGraphState()
@@ -88,7 +88,7 @@ export default function GraphEditor() {
       },
     }
     try {
-      const res = await fetch('http://localhost:8000/calculate', {
+      const res = await fetch(`${API_URL}/calculate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),

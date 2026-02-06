@@ -24,3 +24,7 @@ dist-ssr
 *.sw?
 server/.venv
 server/__pycache__/main.cpython-313.pyc
+server/__pycache__/api.cpython-313.pyc
+server/__pycache__/logic.cpython-313.pyc
+server/__pycache__/main.cpython-313.pyc
+server/__pycache__/main.cpython-313.pyc
